@@ -32,8 +32,8 @@ extern "C" {
 #define CAN_MAX_STD_ID (0x7FF)
 #define CAN_STD_ID_MASK CAN_MAX_STD_ID
 #define CAN_EXT_ID_MASK (0x1FFFFFFF)
-#define CAN_MAX_DLC    (8)
-#define CAN_MAX_DLEN    8
+#define CAN_MAX_DLC    (15)
+#define CAN_MAX_DLEN    64
 
 /* CAN_TX_* are the error flags from tx_callback and send.*/
 /** send successfully */
