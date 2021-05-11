@@ -36,6 +36,8 @@
 BUILD_ASSERT(MCP25XXFD_RXFIFO_LENGTH >= 1,
 	     "Cannot fit RX FIFO into MCP25xxFD RAM");
 
+#define PADDING uint8_t mypad[2];
+
 struct mcp25xxfd_mailbox {
 	can_tx_callback_t cb;
 	void *cb_arg;
@@ -141,7 +143,9 @@ struct mcp25xxfd_config {
 /* MCP25XXFD Registers */
 
 #define MCP25XXFD_REG_CON 0x000
-union mcp25xxfd_con {
+struct mcp25xxfd_con {
+	PADDING;
+	union {
 	struct {
 		uint32_t DNCNT : 5;     /* Device Net Filter Bit Number */
 		uint32_t ISOCRCEN : 1;  /* Enable ISO CRC in CAN FD Frames */
@@ -164,6 +168,7 @@ union mcp25xxfd_con {
 	};
 	uint32_t word;
 	uint8_t byte[4];
+	};
 };
 
 #define MCP25XXFD_REG_NBTCFG 0x004
@@ -277,6 +282,44 @@ union mcp25xxfd_int {
 	uint8_t byte[4];
 };
 
+struct mcp25xxfd_int_wpad {
+	PADDING;
+	union {
+	struct {
+		uint32_t TXIF : 1;      /* Transmit FIFO Interrupt Flag */
+		uint32_t RXIF : 1;      /* Receive FIFO Interrupt Flag */
+		uint32_t TCBIF : 1;     /* Time Base Counter Interrupt Flag */
+		uint32_t MODIF : 1;     /* Mode Change Interrupt Flag */
+		uint32_t TEFIF : 1;     /* Transmit Event FIFO Interrupt Flag */
+		uint32_t res0 : 3;
+		uint32_t ECCIF : 1;     /* ECC Error Interrupt Flag */
+		uint32_t SPICRCIF : 1;  /* SPI CRC Error Interrupt Flag */
+		uint32_t TXATIF : 1;    /* Transmit Attempt Interrupt Flag */
+		uint32_t RXOVIF : 1;    /* Receive FIFO Overflow Interrupt Flag */
+		uint32_t SERRIF : 1;    /* System Error Interrupt Flag */
+		uint32_t CERRIF : 1;    /* CAN Bus Error Interrupt Flag */
+		uint32_t WAKIF : 1;     /* Bus Wake Up Interrupt Flag */
+		uint32_t IVMIF : 1;     /* Invalid Message Interrupt Flag */
+		uint32_t TXIE : 1;      /* Transmit FIFO Interrupt Enable */
+		uint32_t RXIE : 1;      /* Receive FIFO Interrupt Enable */
+		uint32_t TBCIE : 1;     /* Time Base Counter Interrupt Enable */
+		uint32_t MODIE : 1;     /* Mode Change Interrupt Enable */
+		uint32_t TEFIE : 1;     /* Transmit Event FIFO Interrupt Enable */
+		uint32_t res1 : 3;
+		uint32_t ECCIE : 1;     /* ECC Error Interrupt Enable */
+		uint32_t SPICRCIE : 1;  /* SPI CRC Error Interrupt Enable */
+		uint32_t TXATIE : 1;    /* Transmit Attempt Interrupt Enable */
+		uint32_t RXOVIE : 1;    /* Receive FIFO Overflow Interrupt Enable */
+		uint32_t SERRIE : 1;    /* System Error Interrupt Enable */
+		uint32_t CERRIE : 1;    /* CAN Bus Error Interrupt Enable */
+		uint32_t WAKIE : 1;     /* Bus Wake Up Interrupt Enable */
+		uint32_t IVMIE : 1;     /* Invalid Message Interrupt Enable */
+	};
+	uint32_t word;
+	uint8_t byte[4];
+	};
+};
+
 #define MCP25XXFD_REG_INTREGS MCP25XXFD_REG_VEC
 union mcp25xxfd_intregs {
 	struct {
@@ -292,7 +335,9 @@ union mcp25xxfd_intregs {
 
 #define MCP25XXFD_REG_TREC 0x034
 
-union mcp25xxfd_trec {
+struct mcp25xxfd_trec {
+	PADDING;
+	union {
 	struct {
 		uint32_t REC : 8;       /* Receive Error Counter */
 		uint32_t TEC : 8;       /* Transmit Error Counter */
@@ -306,6 +351,7 @@ union mcp25xxfd_trec {
 	};
 	uint32_t word;
 	uint8_t bytes[4];
+	};
 };
 
 #define MCP25XXFD_REG_BDIAG1 0x3C
@@ -387,13 +433,16 @@ union mcp25xxfd_fifosta {
 #define MCP25XXFD_REG_TXQUA 0x058
 #define MCP25XXFD_REG_FIFOUA(m) (MCP25XXFD_REG_TXQUA + (m) * 0xC)
 
-union mcp25xxfd_fifo {
+struct mcp25xxfd_fifo {
+	PADDING;
+	union {
 	struct {
 		union mcp25xxfd_fifocon con;    /* FIFO Control Register */
 		union mcp25xxfd_fifosta sta;    /* FIFO Status Register */
 		uint32_t ua;                    /* FIFO User Address Register */
 	};
 	uint32_t words[3];
+	};
 };
 
 #define MCP21518FD_REG_FLTCON(m) (0x1D0 + m)
@@ -499,7 +548,7 @@ struct mcp25xxfd_txobj {
 	uint8_t DATA[CAN_MAX_DLEN];
 };
 
-struct mcp25xxfd_rxobj {
+struct rxobj {
 	uint32_t SID : 11;
 	uint32_t EID : 18;
 	uint32_t SID11 : 1;
@@ -519,7 +568,19 @@ struct mcp25xxfd_rxobj {
 	uint8_t DATA[CAN_MAX_DLEN];
 };
 
-struct mcp25xxfd_tefobj {
+struct mcp25xxfd_rxobj {
+	PADDING;
+	union {
+	struct rxobj obj;
+#if defined(CONFIG_CAN_RX_TIMESTAMP)
+	uint8_t bytes[8 + CAN_MAX_DLEN + 4];
+#else
+	uint8_t bytes[8 + CAN_MAX_DLEN];
+#endif
+	};
+};
+
+struct tefobj {
 	uint32_t SID : 11;
 	uint32_t EID : 18;
 	uint32_t SID11 : 1;
@@ -531,6 +592,14 @@ struct mcp25xxfd_tefobj {
 	uint32_t FDF : 1;       /* FD Frame */
 	uint32_t ESI : 1;       /* Error Status Indicator */
 	uint32_t SEQ : 23;
+};
+
+struct mcp25xxfd_tefobj {
+	PADDING;
+	union {
+	struct tefobj obj;
+	uint8_t bytes[4];
+	};
 };
 
 #endif /* ZEPHYR_DRIVERS_CAN_MICROCHIP_MCP25XXFD_H_ */

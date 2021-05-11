@@ -36,10 +36,10 @@ static int mcp25xxfd_reset(const struct device *dev)
 	return spi_write(DEV_DATA(dev)->spi, &DEV_DATA(dev)->spi_cfg, &tx);
 }
 
-static int mcp25xxfd_read(const struct device *dev, uint16_t address, void *rxd,
-			  uint8_t rx_len)
+static int mcp25xxfd_read(const struct device *dev, uint16_t address, void *rxd, uint8_t rx_len, int offset)
 {
 	uint8_t cmd_buf[2 + rx_len];
+	memset(cmd_buf, 0, 2 + rx_len);
 
 	cmd_buf[0] = (MCP25XXFD_OPCODE_READ << 4) + ((address >> 8) & 0x0F);
 	cmd_buf[1] = address & 0xFF;
@@ -47,7 +47,7 @@ static int mcp25xxfd_read(const struct device *dev, uint16_t address, void *rxd,
 		{ .buf = cmd_buf, .len = sizeof(cmd_buf) },
 	};
 	const struct spi_buf rx_buf[] = {
-		{ .buf = cmd_buf, .len = sizeof(cmd_buf) },
+		{ .buf = (uint8_t*)rxd + offset - 2, .len = rx_len + 2 },
 	};
 	const struct spi_buf_set tx = { .buffers = tx_buf,
 					.count = ARRAY_SIZE(tx_buf) };
@@ -57,7 +57,6 @@ static int mcp25xxfd_read(const struct device *dev, uint16_t address, void *rxd,
 
 	ret = spi_transceive(DEV_DATA(dev)->spi, &DEV_DATA(dev)->spi_cfg,
 			     &tx, &rx);
-	memcpy(rxd, &cmd_buf[2], rx_len);
 	if (ret < 0) {
 		LOG_ERR("Failed to read %d bytes from 0x%03x", rx_len, address);
 	}
@@ -99,18 +98,17 @@ static inline int mcp25xxfd_writew(const struct device *dev, uint16_t address,
 	return mcp25xxfd_write(dev, address, txd, 4);
 }
 
-static int mcp25xxfd_fifo_read(const struct device *dev, uint16_t fifo_address,
-			       void *rxd, uint8_t rx_len)
+static int mcp25xxfd_fifo_read(const struct device *dev, uint16_t fifo_address, void *rxd, uint8_t rx_len, int offset)
 {
 	struct mcp25xxfd_data *dev_data = DEV_DATA(dev);
-	union mcp25xxfd_fifo fiforegs;
+	struct mcp25xxfd_fifo fiforegs;
 	int ret;
 
 	if (CONFIG_CAN_MCP25XXFD_MAX_TX_QUEUE > 1) {
 	k_mutex_lock(&dev_data->mutex, K_FOREVER);
 	}
 
-	ret = mcp25xxfd_read(dev, fifo_address, &fiforegs, sizeof(fiforegs));
+	ret = mcp25xxfd_read(dev, fifo_address, &fiforegs, 12, offsetof(struct mcp25xxfd_fifo, words));
 	if (ret < 0) {
 		goto done;
 	}
@@ -120,7 +118,7 @@ static int mcp25xxfd_fifo_read(const struct device *dev, uint16_t fifo_address,
 		goto done;
 	}
 
-	ret = mcp25xxfd_read(dev, 0x400 + fiforegs.ua, rxd, rx_len);
+	ret = mcp25xxfd_read(dev, 0x400 + fiforegs.ua, rxd, rx_len, offset);
 	if (ret < 0) {
 		goto done;
 	}
@@ -139,14 +137,14 @@ static int mcp25xxfd_fifo_write(const struct device *dev, uint16_t fifo_address,
 				void *txd, uint8_t tx_len)
 {
 	struct mcp25xxfd_data *dev_data = DEV_DATA(dev);
-	union mcp25xxfd_fifo fiforegs;
+	struct mcp25xxfd_fifo fiforegs;
 	int ret;
 
 	if (CONFIG_CAN_MCP25XXFD_MAX_TX_QUEUE > 1) {
 	k_mutex_lock(&dev_data->mutex, K_FOREVER);
 	}
 
-	ret = mcp25xxfd_read(dev, fifo_address, &fiforegs, sizeof(fiforegs));
+	ret = mcp25xxfd_read(dev, fifo_address, &fiforegs, 12, offsetof(struct mcp25xxfd_fifo, words));
 	if (ret < 0) {
 		goto done;
 	}
@@ -197,34 +195,36 @@ static void mcp25xxfd_rxobj_to_zcanframe(const struct mcp25xxfd_rxobj *src,
 {
 	memset(dst, 0, sizeof(struct zcan_frame));
 
-	if (src->IDE) {
-		dst->id = src->EID | (src->SID << 18);
+	const struct rxobj *src2 = &src->obj;
+
+	if (src2->IDE) {
+		dst->id = src2->EID | (src2->SID << 18);
 		dst->id_type = CAN_EXTENDED_IDENTIFIER;
 	} else {
-		dst->id = src->SID;
+		dst->id = src2->SID;
 		dst->id_type = CAN_STANDARD_IDENTIFIER;
 	}
-	dst->brs = src->BRS;
-	dst->rtr = src->RTR;
-	dst->dlc = src->DLC;
+	dst->brs = src2->BRS;
+	dst->rtr = src2->RTR;
+	dst->dlc = src2->DLC;
 #if defined(CONFIG_CAN_FD_MODE)
-	dst->fd = src->FDF;
+	dst->fd = src2->FDF;
 #endif
 
 #if defined(CONFIG_CAN_RX_TIMESTAMP)
-	dst->timestamp = src->RXMSGTS;
+	dst->timestamp = src2->RXMSGTS;
 #endif
-	memcpy(dst->data, src->DATA, MIN(can_dlc_to_bytes(src->DLC), CAN_MAX_DLEN));
+	memcpy(dst->data, src2->DATA, MIN(can_dlc_to_bytes(src2->DLC), CAN_MAX_DLEN));
 }
 
 static int mcp25xxfd_get_raw_mode(const struct device *dev, uint8_t *mode)
 {
 	struct mcp25xxfd_data *dev_data = DEV_DATA(dev);
-	union mcp25xxfd_con con;
+	struct mcp25xxfd_con con;
 	int ret;
 
 	k_mutex_lock(&dev_data->mutex, K_FOREVER);
-	ret = mcp25xxfd_read(dev, MCP25XXFD_REG_CON + 2, &con.byte[2], 1);
+	ret = mcp25xxfd_read(dev, MCP25XXFD_REG_CON + 2, &con.byte[2], 1, 0);
 	k_mutex_unlock(&dev_data->mutex);
 	*mode = con.OPMOD;
 	return ret;
@@ -233,12 +233,12 @@ static int mcp25xxfd_get_raw_mode(const struct device *dev, uint8_t *mode)
 static int mcp25xxfd_set_raw_mode(const struct device *dev, uint8_t mode)
 {
 	struct mcp25xxfd_data *dev_data = DEV_DATA(dev);
-	union mcp25xxfd_con con;
+	struct mcp25xxfd_con con;
 	int ret;
 
 	while (true) {
 		k_mutex_lock(&dev_data->mutex, K_FOREVER);
-		ret = mcp25xxfd_read(dev, MCP25XXFD_REG_CON, &con, 4);
+		ret = mcp25xxfd_read(dev, MCP25XXFD_REG_CON, &con, 4, offsetof(struct mcp25xxfd_con, byte));
 		if (ret < 0 || con.OPMOD == mode) {
 			k_mutex_unlock(&dev_data->mutex);
 			break;
@@ -587,12 +587,18 @@ static void mcp25xxfd_rx(const struct device *dev, int fifo_idx)
 	struct mcp25xxfd_rxobj rx_frame;
 	struct zcan_frame msg;
 
-	while (mcp25xxfd_fifo_read(dev, MCP25XXFD_REG_FIFOCON(fifo_idx), &rx_frame,
-				   sizeof(rx_frame)) >= 0) {
+	int fetch_size = 8 + CAN_MAX_DLEN;
+#if defined(CONFIG_CAN_RX_TIMESTAMP)
+	fetch_size += 4;
+#endif
+
+	int offset = offsetof(struct mcp25xxfd_rxobj, bytes);
+
+	while (mcp25xxfd_fifo_read(dev, MCP25XXFD_REG_FIFOCON(fifo_idx), &rx_frame, fetch_size, offset) >= 0) {
 		mcp25xxfd_rxobj_to_zcanframe(&rx_frame, &msg);
-		if (dev_data->filter_usage & BIT(rx_frame.FILHIT)) {
-			dev_data->rx_cb[rx_frame.FILHIT](
-				&msg, dev_data->cb_arg[rx_frame.FILHIT]);
+		if (dev_data->filter_usage & BIT(rx_frame.obj.FILHIT)) {
+			dev_data->rx_cb[rx_frame.obj.FILHIT](
+				&msg, dev_data->cb_arg[rx_frame.obj.FILHIT]);
 		}
 	}
 }
@@ -603,9 +609,11 @@ static void mcp25xxfd_tx_done(const struct device *dev)
 	struct mcp25xxfd_tefobj tefobj;
 	uint8_t mailbox_idx;
 
-	while (mcp25xxfd_fifo_read(dev, MCP25XXFD_REG_TEFCON, &tefobj,
-				   sizeof(tefobj)) >= 0) {
-		mailbox_idx = tefobj.SEQ;
+	int fetch_size = 8;
+	int offset = offsetof(struct mcp25xxfd_tefobj, obj);
+
+	while (mcp25xxfd_fifo_read(dev, MCP25XXFD_REG_TEFCON, &tefobj, fetch_size, offset) >= 0) {
+		mailbox_idx = tefobj.obj.SEQ;
 		if (dev_data->mailbox[mailbox_idx].cb == NULL) {
 			k_sem_give(&dev_data->mailbox[mailbox_idx].tx_sem);
 		} else {
@@ -627,14 +635,14 @@ static void mcp25xxfd_int_thread(const struct device *dev)
 {
 	const struct mcp25xxfd_config *dev_cfg = DEV_CFG(dev);
 	struct mcp25xxfd_data *dev_data = DEV_DATA(dev);
-	union mcp25xxfd_int ints;
-	union mcp25xxfd_trec trec;
+	struct mcp25xxfd_int_wpad ints;
+	struct mcp25xxfd_trec trec;
 	int ret;
 
 	while (1) {
 		k_sem_take(&dev_data->int_sem, K_FOREVER);
 		while (1) {
-			ret = mcp25xxfd_read(dev, MCP25XXFD_REG_INT, &ints, 2);
+			ret = mcp25xxfd_read(dev, MCP25XXFD_REG_INT, &ints, 2, offsetof(struct mcp25xxfd_int_wpad, byte));
 			if (ret < 0) {
 				continue;
 			}
@@ -653,7 +661,7 @@ static void mcp25xxfd_int_thread(const struct device *dev)
 			}
 
 			if (ints.CERRIF) {
-				ret = mcp25xxfd_read(dev, MCP25XXFD_REG_TREC, &trec, 4);
+				ret = mcp25xxfd_read(dev, MCP25XXFD_REG_TREC, &trec, 4, offsetof(struct mcp25xxfd_trec, bytes));
 				if (ret >= 0) {
 					enum can_state new_state;
 
@@ -706,7 +714,7 @@ static void mcp25xxfd_int_thread(const struct device *dev)
 				}
 			}
 
-			mcp25xxfd_write(dev, MCP25XXFD_REG_INT, &ints, 2);
+			mcp25xxfd_write(dev, MCP25XXFD_REG_INT, &ints.byte, 2);
 
 			/* Break from loop if INT pin is inactive */
 			ret = gpio_pin_get(dev_data->int_gpio,
@@ -898,7 +906,7 @@ static int mcp25xxfd_init(const struct device *dev)
 
 	k_mutex_lock(&dev_data->mutex, K_FOREVER);
 
-	union mcp25xxfd_con con;
+	struct mcp25xxfd_con con;
 	union mcp25xxfd_int regint = { .word = 0x00000000 };
 	union mcp25xxfd_iocon iocon;
 	union mcp25xxfd_osc osc;
@@ -906,7 +914,7 @@ static int mcp25xxfd_init(const struct device *dev)
 	union mcp25xxfd_fifocon txfifocon = { .word = 0x00600400 };
 	union mcp25xxfd_fifocon fifocon = { .word = 0x00600400 };
 
-	ret = mcp25xxfd_read(dev, MCP25XXFD_REG_CON, &con, 4);
+	ret = mcp25xxfd_read(dev, MCP25XXFD_REG_CON, &con, 4, offsetof(struct mcp25xxfd_con, byte));
 	if (ret < 0) {
 		goto done;
 	} else if (con.OPMOD != MCP25XXFD_OPMODE_CONFIGURATION) {
