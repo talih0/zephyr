@@ -86,6 +86,32 @@ static int mcp25xxfd_write(const struct device *dev, uint16_t address,
 	return ret;
 }
 
+static int mcp25xxfd_write_inplace(const struct device *dev, uint16_t address,
+			   void *txd, uint8_t tx_len, int offset)
+{
+	uint8_t *cmd_buf_tx = txd;
+	cmd_buf_tx += offset - 2;
+
+	cmd_buf_tx[0] = (MCP25XXFD_OPCODE_WRITE << 4) +
+		     ((address >> 8) & 0xF);
+	cmd_buf_tx[1] = address & 0xFF;
+
+	const struct spi_buf tx_buf[] = {
+		{ .buf = cmd_buf_tx, .len = tx_len + 2 },
+	};
+
+	const struct spi_buf_set tx = { .buffers = tx_buf,
+					.count = ARRAY_SIZE(tx_buf) };
+	int ret;
+
+	ret = spi_write(DEV_DATA(dev)->spi, &DEV_DATA(dev)->spi_cfg, &tx);
+
+	if (ret < 0) {
+		LOG_ERR("Failed to write %d bytes to 0x%03x", tx_len, address);
+	}
+	return ret;
+}
+
 static int mcp25xxfd_fifo_read(const struct device *dev, uint16_t fifo_address, void *rxd, uint8_t rx_len, int offset)
 {
 	struct mcp25xxfd_data *dev_data = DEV_DATA(dev);
@@ -122,7 +148,7 @@ done:
 }
 
 static int mcp25xxfd_fifo_write(const struct device *dev, uint16_t fifo_address,
-				void *txd, uint8_t tx_len)
+				void *txd, uint8_t tx_len, int offset)
 {
 	struct mcp25xxfd_data *dev_data = DEV_DATA(dev);
 	struct mcp25xxfd_fifo fiforegs;
@@ -142,7 +168,7 @@ static int mcp25xxfd_fifo_write(const struct device *dev, uint16_t fifo_address,
 		goto done;
 	}
 
-	ret = mcp25xxfd_write(dev, 0x400 + fiforegs.ua, txd, tx_len);
+	ret = mcp25xxfd_write_inplace(dev, 0x400 + fiforegs.ua, txd, tx_len, offset);
 	if (ret < 0) {
 		goto done;
 	}
@@ -161,21 +187,22 @@ done:
 static void mcp25xxfd_zcanframe_to_txobj(const struct zcan_frame *src,
 					 struct mcp25xxfd_txobj *dst)
 {
+	struct txobj *dst2 = &dst->obj;
 	memset(dst, 0, sizeof(struct mcp25xxfd_txobj));
 	if (src->id_type == CAN_STANDARD_IDENTIFIER) {
-		dst->SID = src->id;
+		dst2->SID = src->id;
 	} else {
-		dst->SID = src->id >> 18;
-		dst->EID = src->id;
-		dst->IDE = 1;
+		dst2->SID = src->id >> 18;
+		dst2->EID = src->id;
+		dst2->IDE = 1;
 	}
-	dst->BRS = src->brs;
-	dst->RTR = src->rtr == CAN_REMOTEREQUEST;
-	dst->DLC = src->dlc;
+	dst2->BRS = src->brs;
+	dst2->RTR = src->rtr == CAN_REMOTEREQUEST;
+	dst2->DLC = src->dlc;
 #if defined(CONFIG_CAN_FD_MODE)
-	dst->FDF = src->fd;
+	dst2->FDF = src->fd;
 #endif
-	memcpy(dst->DATA, src->data, MIN(can_dlc_to_bytes(src->dlc), CAN_MAX_DLEN));
+	memcpy(dst2->DATA, src->data, MIN(can_dlc_to_bytes(src->dlc), CAN_MAX_DLEN));
 }
 
 static void mcp25xxfd_rxobj_to_zcanframe(const struct mcp25xxfd_rxobj *src,
@@ -435,9 +462,9 @@ static int mcp25xxfd_send(const struct device *dev,
 	dev_data->mailbox[mailbox_idx].cb_arg = callback_arg;
 
 	mcp25xxfd_zcanframe_to_txobj(msg, &tx_frame);
-	tx_frame.SEQ = mailbox_idx;
+	tx_frame.obj.SEQ = mailbox_idx;
 	ret = mcp25xxfd_fifo_write(dev, MCP25XXFD_REG_FIFOCON(mailbox_idx), &tx_frame,
-				   sizeof(struct mcp25xxfd_txobj));
+				   8 + CAN_MAX_DLEN, offsetof(struct mcp25xxfd_txobj, obj));
 
 	if (ret >= 0) {
 		if (callback == NULL) {

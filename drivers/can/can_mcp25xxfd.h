@@ -533,7 +533,7 @@ union mcp25xxfd_iocon {
 
 /* MCP25XXFD Objects */
 
-struct mcp25xxfd_txobj {
+struct txobj {
 	uint32_t SID : 11;
 	uint32_t EID : 18;
 	uint32_t SID11 : 1;
@@ -546,6 +546,14 @@ struct mcp25xxfd_txobj {
 	uint32_t ESI : 1;       /* Error Status Indicator */
 	uint32_t SEQ : 23;
 	uint8_t DATA[CAN_MAX_DLEN];
+};
+
+struct mcp25xxfd_txobj {
+    PADDING;
+    union {
+    struct txobj obj;
+    uint8_t bytes[8 + CAN_MAX_DLEN];
+    };
 };
 
 struct rxobj {
