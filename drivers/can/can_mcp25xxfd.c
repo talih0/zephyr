@@ -623,33 +623,32 @@ static void mcp25xxfd_int_thread(const struct device *dev)
 {
 	const struct mcp25xxfd_config *dev_cfg = DEV_CFG(dev);
 	struct mcp25xxfd_data *dev_data = DEV_DATA(dev);
-	union mcp25xxfd_intregs intregs;
+	union mcp25xxfd_int ints;
 	union mcp25xxfd_trec trec;
 	int ret;
 
 	while (1) {
 		k_sem_take(&dev_data->int_sem, K_FOREVER);
 		while (1) {
-			ret = mcp25xxfd_read(dev, MCP25XXFD_REG_INTREGS,
-					     &intregs, sizeof(intregs));
+			ret = mcp25xxfd_read(dev, MCP25XXFD_REG_INT, &ints, 2);
 			if (ret < 0) {
 				continue;
 			}
 
-			if (intregs.ints.RXIF) {
+			if (ints.RXIF) {
 				mcp25xxfd_rx(dev, MCP25XXFD_RXFIFO_IDX);
 			}
 
-			if (intregs.ints.TEFIF) {
+			if (ints.TEFIF) {
 				mcp25xxfd_tx_done(dev);
 			}
 
-			if (intregs.ints.MODIF) {
+			if (ints.MODIF) {
 				k_sem_give(&dev_data->mode_sem);
-				intregs.ints.MODIF = 0;
+				ints.MODIF = 0;
 			}
 
-			if (intregs.ints.CERRIF) {
+			if (ints.CERRIF) {
 				ret = mcp25xxfd_readw(dev, MCP25XXFD_REG_TREC,
 						      &trec);
 				if (ret >= 0) {
@@ -696,11 +695,11 @@ static void mcp25xxfd_int_thread(const struct device *dev)
 						}
 					}
 
-					intregs.ints.CERRIF = 0;
+					ints.CERRIF = 0;
 				}
 			}
 
-			mcp25xxfd_writew(dev, MCP25XXFD_REG_INT, &intregs.ints);
+			mcp25xxfd_write(dev, MCP25XXFD_REG_INT, &ints, 2);
 
 			/* Break from loop if INT pin is inactive */
 			ret = gpio_pin_get(dev_data->int_gpio,
