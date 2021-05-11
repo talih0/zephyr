@@ -86,18 +86,6 @@ static int mcp25xxfd_write(const struct device *dev, uint16_t address,
 	return ret;
 }
 
-static inline int mcp25xxfd_writeb(const struct device *dev, uint16_t address,
-				   void *txd)
-{
-	return mcp25xxfd_write(dev, address, txd, 1);
-}
-
-static inline int mcp25xxfd_writew(const struct device *dev, uint16_t address,
-				   void *txd)
-{
-	return mcp25xxfd_write(dev, address, txd, 4);
-}
-
 static int mcp25xxfd_fifo_read(const struct device *dev, uint16_t fifo_address, void *rxd, uint8_t rx_len, int offset)
 {
 	struct mcp25xxfd_data *dev_data = DEV_DATA(dev);
@@ -124,7 +112,7 @@ static int mcp25xxfd_fifo_read(const struct device *dev, uint16_t fifo_address, 
 	}
 
 	fiforegs.con.UINC = 1;
-	ret = mcp25xxfd_writeb(dev, fifo_address + 1, &fiforegs.con.bytes[1]);
+	ret = mcp25xxfd_write(dev, fifo_address + 1, &fiforegs.con.bytes[1], 1);
 
 done:
 	if (CONFIG_CAN_MCP25XXFD_MAX_TX_QUEUE > 1) {
@@ -161,7 +149,7 @@ static int mcp25xxfd_fifo_write(const struct device *dev, uint16_t fifo_address,
 
 	fiforegs.con.UINC = 1;
 	fiforegs.con.TXREQ = 1;
-	ret = mcp25xxfd_writeb(dev, fifo_address + 1, &fiforegs.con.bytes[1]);
+	ret = mcp25xxfd_write(dev, fifo_address + 1, &fiforegs.con.bytes[1], 1);
 
 done:
 	if (CONFIG_CAN_MCP25XXFD_MAX_TX_QUEUE > 1) {
@@ -271,8 +259,7 @@ static int mcp25xxfd_set_raw_mode(const struct device *dev, uint8_t mode)
 		}
 
 		LOG_DBG("OPMOD: #%d, REQMOD #%d", con.OPMOD, con.REQMOD);
-		ret = mcp25xxfd_writeb(dev, MCP25XXFD_REG_CON + 3,
-				       &con.byte[3]);
+		ret = mcp25xxfd_write(dev, MCP25XXFD_REG_CON + 3, &con.byte[3], 1);
 		k_mutex_unlock(&dev_data->mutex);
 		if (ret < 0) {
 			break;
@@ -341,7 +328,7 @@ static int mcp25xxfd_set_timing(const struct device *dev,
 		.TSEG2 = timing->phase_seg2 - 1,
 		.SJW = timing->sjw - 1,
 	};
-	ret = mcp25xxfd_writew(dev, MCP25XXFD_REG_NBTCFG, nbtcfg.byte);
+	ret = mcp25xxfd_write(dev, MCP25XXFD_REG_NBTCFG, nbtcfg.byte, 4);
 	if (ret < 0) {
 		LOG_ERR("Failed to write device configuration [%d]", ret);
 		goto done;
@@ -354,7 +341,7 @@ static int mcp25xxfd_set_timing(const struct device *dev,
 		.TSEG2 = timing_data->phase_seg2 - 1,
 		.SJW = timing_data->sjw - 1,
 	};
-	ret = mcp25xxfd_writew(dev, MCP25XXFD_REG_DBTCFG, ndtcfg.byte);
+	ret = mcp25xxfd_write(dev, MCP25XXFD_REG_DBTCFG, ndtcfg.byte, 4);
 	if (ret < 0) {
 		LOG_ERR("Failed to write device configuration [%d]", ret);
 		goto done;
@@ -372,7 +359,7 @@ static int mcp25xxfd_set_timing(const struct device *dev,
 		.TDCMOD = MCP25XXFD_TDCMOD_DISABLED,
 #endif
 	};
-	ret = mcp25xxfd_writew(dev, MCP25XXFD_REG_TDC, &tdc);
+	ret = mcp25xxfd_write(dev, MCP25XXFD_REG_TDC, &tdc, 4);
 	if (ret < 0) {
 		LOG_ERR("Failed to write device configuration [%d]", ret);
 		goto done;
@@ -385,7 +372,7 @@ static int mcp25xxfd_set_timing(const struct device *dev,
 		.TSEOF = 0,
 		.TBCPRE = timing->prescaler - 1,
 	};
-	ret = mcp25xxfd_writew(dev, MCP25XXFD_REG_TSCON, &tscon);
+	ret = mcp25xxfd_write(dev, MCP25XXFD_REG_TSCON, &tscon, 4)
 	if (ret < 0) {
 		LOG_ERR("Failed to write device configuration [%d]", ret);
 		goto done;
@@ -502,14 +489,12 @@ static int mcp25xxfd_attach_isr(const struct device *dev,
 			fltobj.EXIDE = 1;
 		}
 		mask.MIDE = 1;
-		ret = mcp25xxfd_writew(dev, MCP25XXFD_REG_FLTOBJ(filter_idx),
-				       &fltobj);
+		ret = mcp25xxfd_write(dev, MCP25XXFD_REG_FLTOBJ(filter_idx), &fltobj, 4);
 		if (ret < 0) {
 			LOG_ERR("Failed to write register [%d]", ret);
 			goto done;
 		}
-		ret = mcp25xxfd_writew(dev, MCP25XXFD_REG_MASK(filter_idx),
-				       &mask);
+		ret = mcp25xxfd_write(dev, MCP25XXFD_REG_MASK(filter_idx), &mask, 4);
 		if (ret < 0) {
 			LOG_ERR("Failed to write register [%d]", ret);
 			goto done;
@@ -517,8 +502,7 @@ static int mcp25xxfd_attach_isr(const struct device *dev,
 
 		fltcon.FLTEN = 1;
 		fltcon.FLTBP = MCP25XXFD_RXFIFO_IDX;
-		ret = mcp25xxfd_writeb(dev, MCP21518FD_REG_FLTCON(filter_idx),
-				       fltcon.byte);
+		ret = mcp25xxfd_write(dev, MCP21518FD_REG_FLTCON(filter_idx), fltcon.byte, 1);
 		if (ret < 0) {
 			LOG_ERR("Failed to write register [%d]", ret);
 			goto done;
@@ -546,7 +530,7 @@ static void mcp25xxfd_detach(const struct device *dev, int filter_nr)
 
 	dev_data->filter_usage &= ~BIT(filter_nr);
 	fltcon.FLTEN = 0;
-	mcp25xxfd_writeb(dev, MCP21518FD_REG_FLTCON(filter_nr), &fltcon);
+	mcp25xxfd_write(dev, MCP21518FD_REG_FLTCON(filter_nr), &fltcon, 1);
 
 	k_mutex_unlock(&dev_data->mutex);
 }
@@ -938,7 +922,7 @@ static int mcp25xxfd_init(const struct device *dev)
 	con.PXEDIS = 0;
 	con.ISOCRCEN = 1;
 	con.DNCNT = 0;
-	ret = mcp25xxfd_writew(dev, MCP25XXFD_REG_CON, con.byte);
+	ret = mcp25xxfd_write(dev, MCP25XXFD_REG_CON, con.byte, 4);
 	if (ret < 0) {
 		goto done;
 	}
@@ -948,7 +932,7 @@ static int mcp25xxfd_init(const struct device *dev)
 	osc.LPMEN = 0;
 	osc.SCLKDIV = 0;
 	osc.CLKODIV = dev_cfg->clko_div;
-	ret = mcp25xxfd_writew(dev, MCP25XXFD_REG_OSC, &osc.word);
+	ret = mcp25xxfd_write(dev, MCP25XXFD_REG_OSC, &osc.word, 4);
 	if (ret < 0) {
 		goto done;
 	}
@@ -963,7 +947,7 @@ static int mcp25xxfd_init(const struct device *dev)
 	iocon.TXCANOD = 0;
 	iocon.SOF = dev_cfg->sof_on_clko ? 1 : 0;
 	iocon.INTOD = 0;
-	ret = mcp25xxfd_writew(dev, MCP25XXFD_REG_IOCON, &iocon.word);
+	ret = mcp25xxfd_write(dev, MCP25XXFD_REG_IOCON, &iocon.word, 4);
 	if (ret < 0) {
 		goto done;
 	}
@@ -972,14 +956,14 @@ static int mcp25xxfd_init(const struct device *dev)
 	regint.MODIE = 1;
 	regint.TEFIE = 1;
 	regint.CERRIE = 1;
-	ret = mcp25xxfd_writew(dev, MCP25XXFD_REG_INT, &regint);
+	ret = mcp25xxfd_write(dev, MCP25XXFD_REG_INT, &regint, 4);
 	if (ret < 0) {
 		goto done;
 	}
 
 	tefcon.FSIZE = MCP25XXFD_TXFIFOS - 1;
 	tefcon.FNEIE = 1;
-	ret = mcp25xxfd_writew(dev, MCP25XXFD_REG_TEFCON, &tefcon);
+	ret = mcp25xxfd_write(dev, MCP25XXFD_REG_TEFCON, &tefcon, 4);
 	if (ret < 0) {
 		goto done;
 	}
@@ -989,7 +973,7 @@ static int mcp25xxfd_init(const struct device *dev)
 	txfifocon.TXPRI = 0;
 	txfifocon.TXEN = 1;
 	for (int i = 0; i < MCP25XXFD_TXFIFOS; i++) {
-		ret = mcp25xxfd_writew(dev, MCP25XXFD_REG_FIFOCON(i), &txfifocon);
+		ret = mcp25xxfd_write(dev, MCP25XXFD_REG_FIFOCON(i), &txfifocon, 4);
 		if (ret < 0) {
 			goto done;
 		}
@@ -1001,7 +985,7 @@ static int mcp25xxfd_init(const struct device *dev)
 	fifocon.TSEN = 1;
 #endif
 	fifocon.FNEIE = 1;
-	ret = mcp25xxfd_writew(dev, MCP25XXFD_REG_FIFOCON(MCP25XXFD_RXFIFO_IDX), &fifocon);
+	ret = mcp25xxfd_write(dev, MCP25XXFD_REG_FIFOCON(MCP25XXFD_RXFIFO_IDX), &fifocon, 4);
 	if (ret < 0) {
 		goto done;
 	}
