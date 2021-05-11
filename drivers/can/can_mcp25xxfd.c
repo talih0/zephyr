@@ -118,7 +118,9 @@ static int mcp25xxfd_fifo_read(const struct device *dev, uint16_t fifo_address,
 	union mcp25xxfd_fifo fiforegs;
 	int ret;
 
+	if (CONFIG_CAN_MCP25XXFD_MAX_TX_QUEUE > 1) {
 	k_mutex_lock(&dev_data->mutex, K_FOREVER);
+	}
 
 	ret = mcp25xxfd_read(dev, fifo_address, &fiforegs, sizeof(fiforegs));
 	if (ret < 0) {
@@ -139,7 +141,9 @@ static int mcp25xxfd_fifo_read(const struct device *dev, uint16_t fifo_address,
 	ret = mcp25xxfd_writeb(dev, fifo_address + 1, &fiforegs.con.bytes[1]);
 
 done:
+	if (CONFIG_CAN_MCP25XXFD_MAX_TX_QUEUE > 1) {
 	k_mutex_unlock(&dev_data->mutex);
+	}
 	return ret;
 }
 
@@ -150,7 +154,9 @@ static int mcp25xxfd_fifo_write(const struct device *dev, uint16_t fifo_address,
 	union mcp25xxfd_fifo fiforegs;
 	int ret;
 
+	if (CONFIG_CAN_MCP25XXFD_MAX_TX_QUEUE > 1) {
 	k_mutex_lock(&dev_data->mutex, K_FOREVER);
+	}
 
 	ret = mcp25xxfd_read(dev, fifo_address, &fiforegs, sizeof(fiforegs));
 	if (ret < 0) {
@@ -172,7 +178,9 @@ static int mcp25xxfd_fifo_write(const struct device *dev, uint16_t fifo_address,
 	ret = mcp25xxfd_writeb(dev, fifo_address + 1, &fiforegs.con.bytes[1]);
 
 done:
+	if (CONFIG_CAN_MCP25XXFD_MAX_TX_QUEUE > 1) {
 	k_mutex_unlock(&dev_data->mutex);
+	}
 	return ret;
 }
 
@@ -434,14 +442,14 @@ static int mcp25xxfd_send(const struct device *dev,
 		return CAN_TIMEOUT;
 	}
 
-	k_mutex_lock(&dev_data->mutex, K_FOREVER);
+	if (CONFIG_CAN_MCP25XXFD_MAX_TX_QUEUE > 1 && k_mutex_lock(&dev_data->mutex, K_FOREVER));
 	for (; mailbox_idx < MCP25XXFD_TXFIFOS; mailbox_idx++) {
 		if ((BIT(mailbox_idx) & dev_data->mailbox_usage) == 0) {
 			dev_data->mailbox_usage |= BIT(mailbox_idx);
 			break;
 		}
 	}
-	k_mutex_unlock(&dev_data->mutex);
+	if (CONFIG_CAN_MCP25XXFD_MAX_TX_QUEUE > 1 && k_mutex_unlock(&dev_data->mutex));
 
 	if (mailbox_idx >= MCP25XXFD_TXFIFOS) {
 		k_sem_give(&dev_data->tx_sem);
@@ -462,9 +470,13 @@ static int mcp25xxfd_send(const struct device *dev,
 				   timeout);
 		}
 	} else {
+		if (CONFIG_CAN_MCP25XXFD_MAX_TX_QUEUE > 1) {
 		k_mutex_lock(&dev_data->mutex, K_FOREVER);
+		}
 		dev_data->mailbox_usage &= ~BIT(mailbox_idx);
+		if (CONFIG_CAN_MCP25XXFD_MAX_TX_QUEUE > 1) {
 		k_mutex_unlock(&dev_data->mutex);
+		}
 		k_sem_give(&dev_data->tx_sem);
 	}
 
@@ -612,9 +624,13 @@ static void mcp25xxfd_tx_done(const struct device *dev)
 			dev_data->mailbox[mailbox_idx].cb(
 				0, dev_data->mailbox[mailbox_idx].cb_arg);
 		}
+		if (CONFIG_CAN_MCP25XXFD_MAX_TX_QUEUE > 1) {
 		k_mutex_lock(&dev_data->mutex, K_FOREVER);
+		}
 		dev_data->mailbox_usage &= ~BIT(mailbox_idx);
+		if (CONFIG_CAN_MCP25XXFD_MAX_TX_QUEUE > 1) {
 		k_mutex_unlock(&dev_data->mutex);
+		}
 		k_sem_give(&dev_data->tx_sem);
 	}
 }
@@ -659,7 +675,9 @@ static void mcp25xxfd_int_thread(const struct device *dev)
 
 						/* Upon entering bus-off, all the fifos are reset. */
 						LOG_DBG("All FIFOs Reset");
+						if (CONFIG_CAN_MCP25XXFD_MAX_TX_QUEUE > 1) {
 						k_mutex_lock(&dev_data->mutex, K_FOREVER);
+						}
 						for (int i = 0; i < MCP25XXFD_TXFIFOS; i++) {
 							if (!(dev_data->mailbox_usage & BIT(i))) {
 								continue;
@@ -673,7 +691,9 @@ static void mcp25xxfd_int_thread(const struct device *dev)
 							dev_data->mailbox_usage &= ~BIT(i);
 							k_sem_give(&dev_data->tx_sem);
 						}
+						if (CONFIG_CAN_MCP25XXFD_MAX_TX_QUEUE > 1) {
 						k_mutex_unlock(&dev_data->mutex);
+						}
 					} else if (trec.TXBP || trec.RXBP) {
 						new_state = CAN_ERROR_PASSIVE;
 					} else {
