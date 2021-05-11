@@ -87,22 +87,10 @@ static int mcp25xxfd_write(const struct device *dev, uint16_t address,
 	return ret;
 }
 
-static inline int mcp25xxfd_readb(const struct device *dev, uint16_t address,
-				  void *rxd)
-{
-	return mcp25xxfd_read(dev, address, rxd, 1);
-}
-
 static inline int mcp25xxfd_writeb(const struct device *dev, uint16_t address,
 				   void *txd)
 {
 	return mcp25xxfd_write(dev, address, txd, 1);
-}
-
-static inline int mcp25xxfd_readw(const struct device *dev, uint16_t address,
-				  void *rxd)
-{
-	return mcp25xxfd_read(dev, address, rxd, 4);
 }
 
 static inline int mcp25xxfd_writew(const struct device *dev, uint16_t address,
@@ -236,7 +224,7 @@ static int mcp25xxfd_get_raw_mode(const struct device *dev, uint8_t *mode)
 	int ret;
 
 	k_mutex_lock(&dev_data->mutex, K_FOREVER);
-	ret = mcp25xxfd_readb(dev, MCP25XXFD_REG_CON + 2, &con.byte[2]);
+	ret = mcp25xxfd_read(dev, MCP25XXFD_REG_CON + 2, &con.byte[2], 1);
 	k_mutex_unlock(&dev_data->mutex);
 	*mode = con.OPMOD;
 	return ret;
@@ -250,7 +238,7 @@ static int mcp25xxfd_set_raw_mode(const struct device *dev, uint8_t mode)
 
 	while (true) {
 		k_mutex_lock(&dev_data->mutex, K_FOREVER);
-		ret = mcp25xxfd_readw(dev, MCP25XXFD_REG_CON, &con);
+		ret = mcp25xxfd_read(dev, MCP25XXFD_REG_CON, &con, 4);
 		if (ret < 0 || con.OPMOD == mode) {
 			k_mutex_unlock(&dev_data->mutex);
 			break;
@@ -665,8 +653,7 @@ static void mcp25xxfd_int_thread(const struct device *dev)
 			}
 
 			if (ints.CERRIF) {
-				ret = mcp25xxfd_readw(dev, MCP25XXFD_REG_TREC,
-						      &trec);
+				ret = mcp25xxfd_read(dev, MCP25XXFD_REG_TREC, &trec, 4);
 				if (ret >= 0) {
 					enum can_state new_state;
 
@@ -919,7 +906,7 @@ static int mcp25xxfd_init(const struct device *dev)
 	union mcp25xxfd_fifocon txfifocon = { .word = 0x00600400 };
 	union mcp25xxfd_fifocon fifocon = { .word = 0x00600400 };
 
-	ret = mcp25xxfd_readw(dev, MCP25XXFD_REG_CON, &con);
+	ret = mcp25xxfd_read(dev, MCP25XXFD_REG_CON, &con, 4);
 	if (ret < 0) {
 		goto done;
 	} else if (con.OPMOD != MCP25XXFD_OPMODE_CONFIGURATION) {
