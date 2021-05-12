@@ -66,6 +66,7 @@ static int mcp25xxfd_read(const struct device *dev, uint16_t address, void *rxd,
 static int mcp25xxfd_write(const struct device *dev, uint16_t address,
 			   void *txd, uint8_t tx_len)
 {
+	int ret;
 	uint8_t cmd_buf[2 + tx_len];
 
 	cmd_buf[0] = (MCP25XXFD_OPCODE_WRITE << 4) +
@@ -76,9 +77,11 @@ static int mcp25xxfd_write(const struct device *dev, uint16_t address,
 	};
 	const struct spi_buf_set tx = { .buffers = tx_buf,
 					.count = ARRAY_SIZE(tx_buf) };
-	int ret;
 
-	memcpy(&cmd_buf[2], txd, tx_len);
+	for (int i = 0; i < tx_len; i++) {
+		cmd_buf[i+2] = *((uint8_t*)txd + i);
+	}
+
 	ret = spi_write(DEV_DATA(dev)->spi, &DEV_DATA(dev)->spi_cfg, &tx);
 	if (ret < 0) {
 		LOG_ERR("Failed to write %d bytes to 0x%03x", tx_len, address);
