@@ -24,6 +24,8 @@ LOG_MODULE_REGISTER(mcp25xxfd_can);
  */
 #define USE_SP_ALGO (DT_INST_FOREACH_STATUS_OKAY(SP_IS_SET) 0)
 
+static uint8_t tx_null_buffer[200];
+
 static int mcp25xxfd_reset(const struct device *dev)
 {
 	uint8_t cmd_buf[] = { 0x00, 0x00 };
@@ -38,13 +40,10 @@ static int mcp25xxfd_reset(const struct device *dev)
 
 static int mcp25xxfd_read(const struct device *dev, uint16_t address, void *rxd, uint8_t rx_len, int offset)
 {
-	uint8_t cmd_buf[2 + rx_len];
-	memset(cmd_buf, 0, 2 + rx_len);
-
-	cmd_buf[0] = (MCP25XXFD_OPCODE_READ << 4) + ((address >> 8) & 0x0F);
-	cmd_buf[1] = address & 0xFF;
+	tx_null_buffer[0] = (MCP25XXFD_OPCODE_READ << 4) + ((address >> 8) & 0x0F);
+	tx_null_buffer[1] = address & 0xFF;
 	const struct spi_buf tx_buf[] = {
-		{ .buf = cmd_buf, .len = sizeof(cmd_buf) },
+		{ .buf = tx_null_buffer, .len = 2 + rx_len },
 	};
 	const struct spi_buf rx_buf[] = {
 		{ .buf = (uint8_t*)rxd + offset - 2, .len = rx_len + 2 },
