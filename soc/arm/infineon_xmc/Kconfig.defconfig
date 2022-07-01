@@ -4,3 +4,14 @@
 # Author: Parthiban Nallathambi <parthiban@linumiz.com>
 
 source "soc/arm/infineon_xmc/*/Kconfig.defconfig.series"
+
+DT_CHOSEN_Z_FLASH := zephyr,flash
+
+config FLASH_VMA_BASE_ADDRESS
+	hex "VMA Flash Base Address"
+	default $(dt_chosen_reg_addr_hex,$(DT_CHOSEN_Z_FLASH),1)
+	help
+		XMC4xxx devices have an cached and uncached flash address space. The cached address space is
+		used for reads; The uncached address space is used for erase/write operations. This option
+		points to the cached address. The uncached base address remains CONFIG_FLASH_BASE_ADDRESS which
+		is the base address for flashing the device.	
