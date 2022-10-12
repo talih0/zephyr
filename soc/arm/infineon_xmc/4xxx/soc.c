@@ -11,8 +11,6 @@
 #include <zephyr/init.h>
 #include <soc.h>
 
-#define PMU_FLASH_WS		(0x3U)
-
 void z_arm_platform_init(void)
 {
 	uint32_t temp;
