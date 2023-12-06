@@ -17,6 +17,10 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(flash_mt29fx, CONFIG_FLASH_LOG_LEVEL);
 
+#define ROUND_DOWN_64(x, align) (((uint64_t)(x) / (align)) * (align))
+#define ROUND_UP_64(x, align)                                                                      \
+	((((uint64_t)(x) + ((uint64_t)(align)-1)) / (uint64_t)(align)) * (uint64_t)(align))
+
 void xmc4xxx_ebu_nand_page_mode(const struct device *dev, int region_index, bool is_enable);
 
 #define MAX_DMA_TRANSACTION_SIZE 4095
@@ -64,8 +68,6 @@ struct dma_stream {
 struct flash_mt29fx_data {
 	struct k_sem sem;
 	bool internal_ecc_enabled;
-	uint8_t *internal_buffer;
-	uint32_t internal_buffer_size;
 #ifdef CONFIG_MICRON_MT29FX_MEMC_NAND_USE_DMA
 	struct dma_stream dma_read;
 	struct dma_stream dma_write;
@@ -74,7 +76,7 @@ struct flash_mt29fx_data {
 
 struct flash_mt29fx_config {
 	uint32_t base;
-	uint32_t size;
+	uint64_t size;
 	uint32_t ale_mask;
 	uint32_t cle_mask;
 	struct flash_pages_layout layout;
@@ -84,12 +86,7 @@ struct flash_mt29fx_config {
 	uint16_t write_page_size;
 	uint16_t partial_write_page_size;
 	uint32_t block_size;
-#ifdef CONFIG_MICRON_MT29FX_MEMC_NAND_USE_EXTERNAL_ECC
-	uint16_t ecc_chunk_size;
-	uint8_t ecc_syndrome_bytes;
-	uint16_t oob_size;
-	const struct bch_def *bch_config;
-#endif
+	uint32_t num_blocks;
 	const struct device *memc_dev;
 	uint8_t memc_index;
 };
@@ -106,10 +103,8 @@ static void flash_mt29fx_get_page_layout(const struct device *dev,
 }
 #endif
 
-
 #ifdef CONFIG_MICRON_MT29FX_MEMC_NAND_USE_DMA
-static void dma_read_cb(const struct device *dma_dev, void *user_data, uint32_t channel,
-				   int status)
+static void dma_read_cb(const struct device *dma_dev, void *user_data, uint32_t channel, int status)
 {
 	const struct device *dev = user_data;
 	struct flash_mt29fx_data *data = dev->data;
@@ -148,6 +143,7 @@ static int dma_init(const struct device *dev)
 		k_sem_init(&dma_read->status_sem, 0, 1);
 	}
 
+	/* todo */
 	/* if (data->dma_write.dma_dev != NULL) { */
 	/* } */
 
@@ -156,7 +152,7 @@ static int dma_init(const struct device *dev)
 #endif
 
 static void flash_mt29fx_generate_address_segment(const struct flash_mt29fx_config *dev_config,
-						  uint32_t address, uint64_t *address_segment, bool oob_data)
+						  uint64_t address, uint64_t *address_segment, bool oob_data)
 {
 	int page_size = dev_config->parameters.write_block_size;
 	int leading_zeros = __builtin_clz(page_size - 1) - 16;
@@ -167,25 +163,16 @@ static void flash_mt29fx_generate_address_segment(const struct flash_mt29fx_conf
 		*address_segment += page_size;
 	}
 
-	*address_segment |= (uint64_t)(address & ~(page_size - 1)) << leading_zeros;
+	*address_segment |= (address & ~(page_size - 1)) << leading_zeros;
 	*address_segment = sys_cpu_to_le64(*address_segment);
 }
-
-#ifdef CONFIG_MICRON_MT29FX_MEMC_NAND_USE_EXTERNAL_ECC
-static void flash_mt29fx_generate_ecc_column_address(const struct flash_mt29fx_config *dev_config,
-						     int ecc_chunk_index, uint16_t *address_segment)
-{
-	int page_size = dev_config->parameters.write_block_size;
-
-	*address_segment = page_size + ecc_chunk_index * ECC_OVERHEAD_PER_CHUNK + BAD_MARK_OVERHEAD;
-}
-#endif
 
 static void flash_mt29fx_wait_until_ready(const struct flash_mt29fx_config *dev_config)
 {
 	if (!dev_config->ready_busy_dt.port) {
 		return;
 	}
+
 	for (;;) {
 		int ret = gpio_pin_get_dt(&dev_config->ready_busy_dt);
 
@@ -227,7 +214,6 @@ static inline void flash_mt29fx_read_data(const struct device *dev,
 	const struct flash_mt29fx_config *dev_config = dev->config;
 	volatile uint16_t *addr = (uint16_t *)dev_config->base;
 
-	int64_t start = k_uptime_ticks();
 	xmc4xxx_ebu_nand_page_mode(dev_config->memc_dev, dev_config->memc_index, true);
 
 #ifdef CONFIG_MICRON_MT29FX_MEMC_NAND_USE_DMA
@@ -266,6 +252,10 @@ static inline void flash_mt29fx_read_data(const struct device *dev,
 				if (ret == 0 && stat.busy == false) {
 					break;
 				}
+				if (ret < 0) {
+					LOG_ERR("Error reading dma status [%d]", ret);
+					break;
+				}
 			}
 #endif
 
@@ -280,44 +270,6 @@ static inline void flash_mt29fx_read_data(const struct device *dev,
 	}
 
 	xmc4xxx_ebu_nand_page_mode(dev_config->memc_dev, dev_config->memc_index, false);
-	int64_t end = k_uptime_ticks();
-	LOG_DBG("Read time %d ticks %d bytes", (int32_t)(end - start), len);
-}
-
-static void flash_mt29fx_set_timing_mode(const struct device *dev, uint8_t mode)
-{
-	uint8_t addr = NAND_FLASH_FEATURE_REG_TIMING_MODE;
-	const struct flash_mt29fx_config *dev_config = dev->config;
-	uint32_t array_operations;
-
-	flash_mt29fx_wait_until_ready(dev_config);
-
-	flash_mt29fx_write_command(dev_config, NAND_FLASH_SET_FEATURE_COMMAND);
-	flash_mt29fx_write_address(dev_config, &addr, 1);
-
-	// Wait at least for tADL (70ns) before sending data to the Flash
-	// That's equivalent to ~10 instruction cycles running at max frequency (144MHz)
-	// The line below will consume many more cycles
-	for (int i = 0; i < 10; i++) {
-		arch_nop();
-	}
-
-	array_operations = mode;
-	array_operations = sys_cpu_to_le32(array_operations);
-
-	flash_mt29fx_write_data(dev_config, (uint8_t*)&array_operations, sizeof(array_operations));
-
-	/* check if internal ecc is enabled */
-	flash_mt29fx_write_command(dev_config, NAND_FLASH_GET_FEATURE_COMMAND);
-	flash_mt29fx_write_address(dev_config, &addr, 1);
-
-	for (int i = 0; i < 10; i++) {
-		arch_nop();
-	}
-
-	flash_mt29fx_read_data(dev, (uint8_t*)&array_operations, sizeof(array_operations));
-	array_operations = sys_le32_to_cpu(array_operations);
-	LOG_INF("Timing mode set to %d", array_operations);
 }
 
 static void flash_mt29fx_enable_ecc(const struct device *dev)
@@ -376,7 +328,7 @@ static int flash_mt29fx_init(const struct device *dev)
 	const struct flash_mt29fx_config *dev_config = dev->config;
 	k_sem_init(&dev_data->sem, 1, 1);
 
-	if (dev_config->ready_busy_dt.port) {
+	if (dev_config->ready_busy_dt.port != NULL) {
 		int ret;
 
 		if (!device_is_ready(dev_config->ready_busy_dt.port)) {
@@ -389,7 +341,7 @@ static int flash_mt29fx_init(const struct device *dev)
 		}
 	}
 
-	if (dev_config->write_protect_dt.port) {
+	if (dev_config->write_protect_dt.port != NULL) {
 		int ret;
 
 		if (!device_is_ready(dev_config->write_protect_dt.port)) {
@@ -408,35 +360,18 @@ static int flash_mt29fx_init(const struct device *dev)
 	dma_init(dev);
 #endif
 
-#ifdef CONFIG_MICRON_MT29FX_MEMC_NAND_USE_EXTERNAL_ECC
-	/* check if we have enough space in oob to store the ecc bytes */
-	/* int partial_pages_per_page = dev_config->partial_partial__size; */
-	if (dev_config->write_page_size % dev_config->ecc_chunk_size > 0) {
-		LOG_ERR("Invalid ECC chunk size");
-		return -EINVAL;
-	}
-
-	int ecc_overhead = dev_config->write_page_size / dev_config->ecc_chunk_size * ECC_OVERHEAD_PER_CHUNK;
-	if (BAD_MARK_OVERHEAD + ecc_overhead > dev_config->oob_size) {
-		return -EINVAL;
-	}
-#endif
-
 	flash_mt29fx_write_command(dev_config, NAND_FLASH_RESET_COMMAND);
 	flash_mt29fx_wait_until_ready(dev_config);
 	flash_mt29fx_enable_ecc(dev);
-	flash_mt29fx_set_timing_mode(dev, 0);
-
-	uint32_t cpu_clock = XMC_SCU_CLOCK_GetPeripheralClockFrequency();
-	LOG_INF("CPU clock frequency %d Hz", cpu_clock);
 
 	return 0;
 }
 
-static void flash_mt29fx_load_page_into_cache_reg(const struct flash_mt29fx_config *dev_config, off_t offset)
+static void flash_mt29fx_load_page_into_cache_reg(const struct flash_mt29fx_config *dev_config,
+						  uint64_t address)
 {
 	uint64_t address_segment;
-	uint32_t offset_page_start = ROUND_DOWN((uint32_t)offset, dev_config->write_page_size);
+	uint64_t offset_page_start = ROUND_DOWN_64(address, dev_config->write_page_size);
 
 	flash_mt29fx_generate_address_segment(dev_config, offset_page_start, &address_segment, false);
 	flash_mt29fx_write_command(dev_config, NAND_FLASH_READ_PAGE_START_COMMAND);
@@ -445,67 +380,12 @@ static void flash_mt29fx_load_page_into_cache_reg(const struct flash_mt29fx_conf
 	flash_mt29fx_wait_until_ready(dev_config);
 }
 
-#ifdef CONFIG_MICRON_MT29FX_MEMC_NAND_USE_EXTERNAL_ECC
-static void flash_mt29fx_read_change_column_address(const struct flash_mt29fx_config *dev_config, uint16_t column_address)
-{
-	column_address = sys_cpu_to_le16(column_address);
-
-	flash_mt29fx_write_command(dev_config, NAND_FLASH_RANDOM_DATA_READ_START_COMMAND);
-	flash_mt29fx_write_address(dev_config, (uint8_t *)&column_address, 2);
-	flash_mt29fx_write_command(dev_config, NAND_FLASH_RANDOM_DATA_READ_STOP_COMMAND);
-}
-
-static int flash_mt29fx_read_ecc_chunk(const struct device *dev,
-				       int chunk_index, int chunk_offset, uint8_t *dst, size_t len)
-{
-	struct flash_mt29fx_data *dev_data = dev->data;
-	const struct flash_mt29fx_config *dev_config = dev->config;
-	uint16_t address_segment_chunk = chunk_index * dev_config->ecc_chunk_size;
-	uint8_t ecc_bytes[ECC_OVERHEAD_PER_CHUNK];
-	int ret;
-
-	if (chunk_offset + len > dev_config->ecc_chunk_size) {
-		return -EINVAL;
-	}
-
-	flash_mt29fx_read_change_column_address(dev_config, address_segment_chunk);
-
-	/* read the data chunk */
-	flash_mt29fx_read_data(dev, dev_data->internal_buffer, dev_config->ecc_chunk_size);
-
-	/* change the column address to point to ecc bytes*/
-	flash_mt29fx_generate_ecc_column_address(dev_config, chunk_index, &address_segment_chunk);
-	flash_mt29fx_read_change_column_address(dev_config, address_segment_chunk);
-
-	flash_mt29fx_read_data(dev, ecc_bytes, sizeof(ecc_bytes));
-
-	ret = bch_verify(dev_config->bch_config, dev_data->internal_buffer, dev_config->ecc_chunk_size, ecc_bytes);
-
-	if (ret) {
-		LOG_ERR("Error reading chunk index %d, chunk offset %d", chunk_index, chunk_offset);
-		bch_repair(dev_config->bch_config, dev_data->internal_buffer, dev_config->ecc_chunk_size,
-			   ecc_bytes);
-		ret = bch_verify(dev_config->bch_config, dev_data->internal_buffer, dev_config->ecc_chunk_size,
-				 ecc_bytes);
-	}
-
-	if (ret < 0) {
-		return ret;
-	}
-
-	memcpy(dst, dev_data->internal_buffer + chunk_offset, len);
-
-	return 0;
-
-}
-#endif
-
 /* read from a page at offset of size len */
 /* if an external ecc engine is used, then we have to split up the read into */
 /* ecc chunks, otherwise we can read the whole page. do we need to check the status register */
 /* when this is done? */
 
-static int flash_mt29fx_read_single_page(const struct device *dev, off_t offset, uint8_t *dst,
+static int flash_mt29fx_read_single_page(const struct device *dev, int64_t offset, uint8_t *dst,
 					 size_t len)
 {
 	const struct flash_mt29fx_config *dev_config = dev->config;;
@@ -525,68 +405,15 @@ static int flash_mt29fx_read_single_page(const struct device *dev, off_t offset,
 			LOG_ERR("Read failed due to uncorrectable ECC error");
 			return -EINVAL;
 		}
-
-		/* simply read the data into the output buffer */
-		flash_mt29fx_read_data(dev, dst, len);
-
-		return 0;
 	}
 
-#ifdef CONFIG_MICRON_MT29FX_MEMC_NAND_USE_EXTERNAL_ECC
-	/* how much do need to read from the first ecc chunk */
-	int dst_offset = 0, read_size;
-	uint16_t chunk_offset;
-	uint32_t offset_page_start = ROUND_DOWN((uint32_t)offset, dev_config->write_page_size);
-	int ecc_chunk_start_index = (offset - offset_page_start) / dev_config->ecc_chunk_size;
-	int ret;
-
-	read_size = MIN(ROUND_UP(offset, dev_config->ecc_chunk_size) - offset, len);
-	chunk_offset = offset - ROUND_DOWN(offset, dev_config->ecc_chunk_size);
-
-	if (read_size > 0) {
-		ret = flash_mt29fx_read_ecc_chunk(dev, ecc_chunk_start_index, chunk_offset, &dst[dst_offset], read_size);
-		if (ret < 0) {
-			return ret;
-		}
-
-		dst_offset += read_size;
-		len -= read_size;
-		ecc_chunk_start_index++;
-	}
-
-	int num_pages = len / dev_config->ecc_chunk_size;
-	read_size = dev_config->ecc_chunk_size;
-	for (int i = 0; i < num_pages; i++) {
-		ret = flash_mt29fx_read_ecc_chunk(dev, ecc_chunk_start_index, 0, &dst[dst_offset], read_size);
-		if (ret < 0) {
-			return ret;
-		}
-
-		dst_offset += read_size;
-		len -= read_size;
-		ecc_chunk_start_index++;
-	}
-
-	read_size = len;
-	if (read_size > 0) {
-		ret = flash_mt29fx_read_ecc_chunk(dev, ecc_chunk_start_index, 0, &dst[dst_offset], read_size);
-		if (ret < 0) {
-			return ret;
-		}
-
-		dst_offset += read_size;
-		len -= read_size;
-		ecc_chunk_start_index++;
-	}
-#else
-	/* simply read the data into the output buffer */
 	flash_mt29fx_read_data(dev, dst, len);
-#endif
+
 	return 0;
 
 }
 
-static int flash_mt29fx_read(const struct device *dev, off_t offset, void *data, size_t len)
+static int flash_mt29fx_read_64(const struct device *dev, int64_t offset, void *data, size_t len)
 {
 	struct flash_mt29fx_data *dev_data = dev->data;
 	const struct flash_mt29fx_config *dev_config = dev->config;
@@ -601,15 +428,13 @@ static int flash_mt29fx_read(const struct device *dev, off_t offset, void *data,
 		return -1;
 	}
 
-	LOG_DBG("Reading from flash 0x%x %d", (int)offset, len);
-
 	k_sem_take(&dev_data->sem, K_FOREVER);
 
-	read_size = MIN(ROUND_UP(offset, page_size) - offset, len);
+	read_size = MIN(ROUND_UP_64(offset, page_size) - offset, len);
 	if (read_size > 0) {
 		ret = flash_mt29fx_read_single_page(dev, offset, &dst[dst_offset], read_size);
 		if (ret < 0) {
-			LOG_ERR("Error reading page 0x%x length %d", (uint32_t)offset, len);
+			LOG_ERR("Error reading page [%d]", ret);
 			k_sem_give(&dev_data->sem);
 			return ret;
 		}
@@ -623,7 +448,7 @@ static int flash_mt29fx_read(const struct device *dev, off_t offset, void *data,
 	for (int i = 0; i < num_pages; i++) {
 		ret = flash_mt29fx_read_single_page(dev, offset, &dst[dst_offset], read_size);
 		if (ret < 0) {
-			LOG_ERR("Error reading page 0x%x length %d", (uint32_t)offset, len);
+			LOG_ERR("Error reading page [%d]", ret);
 			k_sem_give(&dev_data->sem);
 			return ret;
 		}
@@ -636,7 +461,7 @@ static int flash_mt29fx_read(const struct device *dev, off_t offset, void *data,
 	if (read_size > 0) {
 		ret = flash_mt29fx_read_single_page(dev, offset, &dst[dst_offset], read_size);
 		if (ret < 0) {
-			LOG_ERR("Error reading page 0x%x length %d", (uint32_t)offset, len);
+			LOG_ERR("Error reading page [%d]", ret);
 			k_sem_give(&dev_data->sem);
 			return ret;
 		}
@@ -650,7 +475,7 @@ static int flash_mt29fx_read(const struct device *dev, off_t offset, void *data,
 	return 0;
 }
 
-static int flash_mt29fx_write_single_partial_page(const struct device *dev, off_t offset,
+static int flash_mt29fx_write_single_partial_page(const struct device *dev, int64_t offset,
 						  const uint8_t *src, size_t len)
 {
 	int ret = 0;
@@ -662,33 +487,6 @@ static int flash_mt29fx_write_single_partial_page(const struct device *dev, off_
 	flash_mt29fx_write_command(dev_config, NAND_FLASH_PROGRAM_PAGE_START_COMMAND);
 	flash_mt29fx_write_address(dev_config, (uint8_t *)&address_segment, 5);
 	flash_mt29fx_write_data(dev_config, src, len);
-
-#ifdef CONFIG_MICRON_MT29FX_MEMC_NAND_USE_EXTERNAL_ECC
-	struct flash_mt29fx_data *dev_data = dev->data;
-	if (!dev_data->internal_ecc_enabled) {
-		uint32_t offset_page_start = ROUND_DOWN((uint32_t)offset, dev_config->write_page_size);
-		int ecc_chunk_size = dev_config->ecc_chunk_size;
-		int ecc_chunk_start_index = (offset - offset_page_start) / ecc_chunk_size;
-		int ecc_chunks = len / ecc_chunk_size;
-
-		for (int i = 0; i < ecc_chunks; i++) {
-			uint8_t ecc_bytes[ECC_OVERHEAD_PER_CHUNK];
-			uint16_t address_segment_ecc;
-
-			bch_generate(dev_config->bch_config, &src[i * dev_config->ecc_chunk_size],
-				     ecc_chunk_size, ecc_bytes);
-
-			flash_mt29fx_generate_ecc_column_address(
-				dev_config, ecc_chunk_start_index + i, &address_segment_ecc);
-			address_segment_ecc = sys_cpu_to_le16(address_segment_ecc);
-
-			flash_mt29fx_write_command(dev_config,
-						   NAND_FLASH_CHANGE_WRITE_COLUMN_COMMAND);
-			flash_mt29fx_write_address(dev_config, (uint8_t *)&address_segment_ecc, 2);
-			flash_mt29fx_write_data(dev_config, ecc_bytes, sizeof(ecc_bytes));
-		}
-	}
-#endif
 
 	flash_mt29fx_write_command(dev_config, NAND_FLASH_PROGRAM_PAGE_STOP_COMMAND);
 	flash_mt29fx_wait_until_ready(dev_config);
@@ -702,7 +500,8 @@ static int flash_mt29fx_write_single_partial_page(const struct device *dev, off_
 	return ret;
 }
 
-static int flash_mt29fx_write(const struct device *dev, off_t offset, const void *data, size_t len)
+static int flash_mt29fx_write_64(const struct device *dev, int64_t offset, const void *data,
+				 size_t len)
 {
 	struct flash_mt29fx_data *dev_data = dev->data;
 	const struct flash_mt29fx_config *dev_config = dev->config;
@@ -720,8 +519,6 @@ static int flash_mt29fx_write(const struct device *dev, off_t offset, const void
 	if (offset % partial_page_size > 0 || (offset + len) % partial_page_size > 0) {
 		return -EINVAL;
 	}
-
-	LOG_DBG("writing to flash 0x%x %d", (int)offset, len);
 
 	k_sem_take(&dev_data->sem, K_FOREVER);
 
@@ -744,57 +541,25 @@ static int flash_mt29fx_write(const struct device *dev, off_t offset, const void
 	return ret;
 }
 
-static int flash_mt29fx_is_page_erased(const struct device *dev, off_t offset, int page_size, bool *is_erased)
-{
-	const struct flash_mt29fx_config *dev_config = dev->config;
-	struct flash_mt29fx_data *dev_data = dev->data;
-	uint64_t address_segment;
-	*is_erased = true;
-
-	if (offset < 0 || offset > dev_config->size || offset % page_size > 0) {
-		return -EINVAL;
-	}
-
-	k_sem_take(&dev_data->sem, K_FOREVER);
-
-	flash_mt29fx_generate_address_segment(dev_config, offset, &address_segment, false);
-	flash_mt29fx_write_command(dev_config, NAND_FLASH_READ_PAGE_START_COMMAND);
-	flash_mt29fx_write_address(dev_config, (uint8_t *)&address_segment, 5);
-	flash_mt29fx_write_command(dev_config, NAND_FLASH_READ_PAGE_STOP_COMMAND);
-	flash_mt29fx_wait_until_ready(dev_config);
-
-	for (int i = 0; i < page_size; i++) {
-		uint8_t data;
-
-		flash_mt29fx_read_data(dev, &data, 1);
-		if (data != ERASE_VALUE) {
-			*is_erased = false;
-			break;
-		}
-	}
-
-	k_sem_give(&dev_data->sem);
-	return 0;
-}
-
-static int flash_mt29fx_is_bad_block(const struct device *dev, off_t offset, bool *is_bad_block)
+static int flash_mt29fx_is_bad_block(const struct device *dev, uint64_t block_index, bool *is_bad_block)
 {
 	const struct flash_mt29fx_config *dev_config = dev->config;
 	struct flash_mt29fx_data *dev_data = dev->data;
 	int block_size = dev_config->layout.pages_size;
 	int page_size = dev_config->parameters.write_block_size;
-	uint64_t address_segment;
+	uint64_t address_segment, offset;
 	uint8_t bad_block_mark;
 
-	if (offset < 0 || offset > dev_config->size || offset % block_size > 0) {
+	if (block_index >= dev_config->num_blocks) {
 		return -EINVAL;
 	}
+
+	offset = block_index * block_size;
 
 	k_sem_take(&dev_data->sem, K_FOREVER);
 
 	/* check the first block */
 	flash_mt29fx_generate_address_segment(dev_config, offset, &address_segment, true);
-	/* flash_mt29fx_generate_address_segment(dev_config, offset, &address_segment, false); */
 	flash_mt29fx_write_command(dev_config, NAND_FLASH_READ_PAGE_START_COMMAND);
 	flash_mt29fx_write_address(dev_config, (uint8_t *)&address_segment, 5);
 	flash_mt29fx_write_command(dev_config, NAND_FLASH_READ_PAGE_STOP_COMMAND);
@@ -803,7 +568,6 @@ static int flash_mt29fx_is_bad_block(const struct device *dev, off_t offset, boo
 
 	if (bad_block_mark == 0) {
 		*is_bad_block = true;
-		LOG_ERR("block 0x%x is bad", (uint32_t)offset);
 		k_sem_give(&dev_data->sem);
 		return 0;
 	}
@@ -819,7 +583,6 @@ static int flash_mt29fx_is_bad_block(const struct device *dev, off_t offset, boo
 	flash_mt29fx_read_data(dev, &bad_block_mark, 1);
 
 	if (bad_block_mark == 0) {
-		LOG_ERR("block 0x%x is bad", (uint32_t)offset);
 		*is_bad_block = true;
 	} else {
 		*is_bad_block = false;
@@ -830,7 +593,7 @@ static int flash_mt29fx_is_bad_block(const struct device *dev, off_t offset, boo
 }
 
 
-static int flash_mt29fx_erase(const struct device *dev, off_t offset, size_t size)
+static int flash_mt29fx_erase_64(const struct device *dev, int64_t offset, uint64_t size)
 {
 	struct flash_mt29fx_data *dev_data = dev->data;
 	const struct flash_mt29fx_config *dev_config = dev->config;
@@ -839,8 +602,8 @@ static int flash_mt29fx_erase(const struct device *dev, off_t offset, size_t siz
 	int num_blocks = size / block_size;
 	int ret_tmp, ret = 0;
 
-	if (offset < 0 || offset >= dev_config->size || offset % block_size > 0 ||
-	    (offset + size) % block_size > 0) {
+	if (offset < 0 || offset + size > dev_config->size || offset % block_size > 0 ||
+	    size % block_size > 0) {
 		return -EINVAL;
 	}
 
@@ -848,15 +611,14 @@ static int flash_mt29fx_erase(const struct device *dev, off_t offset, size_t siz
 		bool is_bad_block;
 		uint8_t status;
 
-		ret_tmp = flash_mt29fx_is_bad_block(dev, offset + i * block_size, &is_bad_block);
+		ret_tmp = flash_mt29fx_is_bad_block(dev, i + offset / block_size, &is_bad_block);
 		if (ret_tmp < 0) {
 			ret = ret_tmp;
 			continue;
 		}
 
 		if (is_bad_block) {
-			LOG_ERR("Erase - bad block at 0x%x detected",
-				(uint32_t)offset + i * block_size);
+			LOG_WRN("Bad block %d - skipping erase", (uint32_t)(i + offset / block_size));
 			continue;
 		}
 
@@ -869,7 +631,7 @@ static int flash_mt29fx_erase(const struct device *dev, off_t offset, size_t siz
 
 		status = flash_mt29fx_read_status(dev);
 		if (status & NAND_FLASH_STATUS_REG_FAIL) {
-			LOG_ERR("Erase operation at 0x%x failed", (uint32_t)offset + i * block_size);
+			LOG_ERR("Erase operation at Block Index %d failed", (uint32_t)(i + offset / block_size));
 			ret = -EINVAL;
 		}
 
@@ -885,49 +647,6 @@ static const struct flash_parameters *flash_mt29fx_get_parameters(const struct d
 	return &dev_config->parameters;
 }
 
-
-static int flash_mt29fx_mark_bad_block(const struct device *dev, off_t offset)
-{
-	struct flash_mt29fx_data *dev_data = dev->data;
-	const struct flash_mt29fx_config *dev_config = dev->config;
-	int block_size = dev_config->layout.pages_size;
-	uint64_t address_segment;
-	uint8_t bad_block_mark = 0;
-
-	if (offset < 0 || offset >= dev_config->size || offset % block_size > 0) {
-		return -EINVAL;
-	}
-
-	LOG_ERR("marking block 0x%x bad", (uint32_t)offset);
-
-	k_sem_take(&dev_data->sem, K_FOREVER);
-
-	flash_mt29fx_generate_address_segment(dev_config, offset, &address_segment, true);
-	flash_mt29fx_write_command(dev_config, NAND_FLASH_PROGRAM_PAGE_START_COMMAND);
-	flash_mt29fx_write_address(dev_config, (uint8_t *)&address_segment, 5);
-	flash_mt29fx_write_data(dev_config, &bad_block_mark, 1);
-	flash_mt29fx_write_command(dev_config, NAND_FLASH_PROGRAM_PAGE_STOP_COMMAND);
-	flash_mt29fx_wait_until_ready(dev_config);
-
-	k_sem_give(&dev_data->sem);
-
-	return 0;
-}
-
-static int flash_mt29fx_internal_move(const struct device *dev, off_t in_offset, off_t out_offset, int len)
-{
-	int ret;
-	struct flash_mt29fx_data *dev_data = dev->data;
-
-	ret = flash_mt29fx_read(dev, in_offset, dev_data->internal_buffer, len);
-	if (ret < 0) {
-		return ret;
-	}
-
-	return flash_mt29fx_write(dev, out_offset, dev_data->internal_buffer, len);
-
-}
-
 static int flash_mt29fx_ex_op(const struct device *dev, uint16_t code, const uintptr_t in,
 			      void *out)
 {
@@ -935,26 +654,6 @@ static int flash_mt29fx_ex_op(const struct device *dev, uint16_t code, const uin
 
 	if (code == FLASH_EX_OP_IS_BAD_BLOCK) {
 		return flash_mt29fx_is_bad_block(dev, in, out);
-	}
-
-	if (code == FLASH_EX_OP_MARK_BAD_BLOCK) {
-		return flash_mt29fx_mark_bad_block(dev, in);
-	}
-
-	if (code == FLASH_EX_OP_IS_PAGE_ERASED) {
-		return flash_mt29fx_is_page_erased(dev, in, dev_config->write_page_size, out);
-	}
-
-	if (code == FLASH_EX_OP_IS_PARTIAL_PAGE_ERASED) {
-		return flash_mt29fx_is_page_erased(dev, in, dev_config->partial_write_page_size, out);
-	}
-
-	if (code == FLASH_EX_OP_INTERNAL_MOVE_PARTIAL_PAGE) {
-		uint32_t in_offset = in;
-		uint32_t out_offset = *(uint32_t*)out;
-
-		return flash_mt29fx_internal_move(dev, in_offset, out_offset,
-						  dev_config->partial_write_page_size);
 	}
 
 	if (code == FLASH_EX_OP_GET_PARTIAL_PAGE_SIZE) {
@@ -966,27 +665,19 @@ static int flash_mt29fx_ex_op(const struct device *dev, uint16_t code, const uin
 }
 
 static const struct flash_driver_api flash_mt29fx_api = {
-	.erase = flash_mt29fx_erase,
-	.write = flash_mt29fx_write,
-	.read = flash_mt29fx_read,
+	.read_64 = flash_mt29fx_read_64,
+	.write_64 = flash_mt29fx_write_64,
+	.erase_64 = flash_mt29fx_erase_64,
 #ifdef CONFIG_FLASH_PAGE_LAYOUT
 	.page_layout = flash_mt29fx_get_page_layout,
 #endif
 	.get_parameters = flash_mt29fx_get_parameters,
-	.ex_op = flash_mt29fx_ex_op};
+	.ex_op = flash_mt29fx_ex_op,
+};
 
 #define BLOCK_SIZE(inst)                                                                           \
 	(DT_INST_PROP(inst, write_page_size) * DT_INST_PROP(inst, pages_per_block))
 
-
-#ifdef CONFIG_MICRON_MT29FX_MEMC_NAND_USE_EXTERNAL_ECC
-#define EXTERNAL_ECC_DECLARE(inst)                                                                 \
-	.ecc_chunk_size = DT_INST_PROP(inst, ecc_chunk_size_bytes),                                \
-	.oob_size = DT_INST_PROP(inst, oob_size_bytes),						   \
-	.bch_config = &bch_4bit,
-#else
-#define EXTERNAL_ECC_DECLARE(inst)
-#endif
 
 #ifdef CONFIG_MICRON_MT29FX_MEMC_NAND_USE_DMA
 #define DMA_CHANNEL_INIT(index, dir, src_burst, dst_burst)                                         \
@@ -1014,20 +705,19 @@ static const struct flash_driver_api flash_mt29fx_api = {
 #define FLASH_MT29FX_INIT(inst)                                                                    \
 	uint8_t flash_mt29fx_internal_buffer_##inst[DT_INST_PROP(inst, partial_write_page_size)];  \
 	static struct flash_mt29fx_data flash_mt29fx_data_##inst = {                               \
-		.internal_buffer = flash_mt29fx_internal_buffer_##inst,                            \
-		.internal_buffer_size = DT_INST_PROP(inst, partial_write_page_size),               \
 		DMA_CHANNEL(inst, write, 8, 8)							   \
 		DMA_CHANNEL(inst, read, 8, 8)							   \
  	};                                                                                         \
 	static struct flash_mt29fx_config flash_mt29fx_cfg_##inst = {                              \
 		.base = DT_INST_REG_ADDR(inst),                                                    \
-		.size = DT_INST_REG_SIZE(inst),                                                    \
+		.size = (uint64_t)DT_INST_PROP(inst, num_blocks) * BLOCK_SIZE(inst),               \
+		.num_blocks = DT_INST_PROP(inst, num_blocks),                                      \
 		.ale_mask = DT_INST_PROP(inst, ale_address_mask),                                  \
 		.cle_mask = DT_INST_PROP(inst, cle_address_mask),                                  \
 		.parameters = {.write_block_size = DT_INST_PROP(inst, write_page_size),            \
 			       .erase_value = ERASE_VALUE},                                        \
 		.layout = {.pages_size = BLOCK_SIZE(inst),                                         \
-			   .pages_count = DT_INST_REG_SIZE(inst) / BLOCK_SIZE(inst)},              \
+			   .pages_count = DT_INST_PROP(inst, num_blocks) },                        \
 		.ready_busy_dt = GPIO_DT_SPEC_INST_GET_OR(inst, ready_busy_gpios, {0}),            \
 		.write_protect_dt = GPIO_DT_SPEC_INST_GET_OR(inst, write_protect_gpios, {0}),      \
 		.write_page_size = DT_INST_PROP(inst, write_page_size),				   \
@@ -1035,7 +725,6 @@ static const struct flash_driver_api flash_mt29fx_api = {
 		.partial_write_page_size = DT_INST_PROP(inst, partial_write_page_size),            \
 		.memc_dev = DEVICE_DT_GET(DT_INST_PROP(inst, memc_handle)),                        \
 		.memc_index = DT_INST_PROP(inst, memc_index),                                      \
-		EXTERNAL_ECC_DECLARE(inst)							   \
 	};                                                                                         \
                                                                                                    \
 	DEVICE_DT_INST_DEFINE(inst, flash_mt29fx_init, NULL, &flash_mt29fx_data_##inst,            \

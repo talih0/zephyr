@@ -24,11 +24,10 @@ properties:
     required: true
     description: Number of pages per block. All pages in a block are erased together.
 
-  ecc-chunk-size-bytes:
+  num-blocks:
     type: int
-
-  oob-size-bytes:
-    type: int
+    required: true
+    description: Number of blocks in the device. Each block is an erasable sector.
 
   ready-busy-gpios:
     type: phandle-array
