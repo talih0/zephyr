@@ -1,0 +1,12 @@
+&can_node0 {
+	status = "okay";
+	input-src = "RXDA";
+	bus-speed = <125000>;
+	sample-point = <875>;
+};
+
+/ {
+	aliases {
+		can-recv-node = &can_node0;
+	};
+};

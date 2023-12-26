@@ -23,7 +23,7 @@ static void tx_std_callback_1(const struct device *dev, int error, void *user_da
 
 	k_sem_give(&tx_callback_sem);
 
-	zassert_equal(dev, can_dev, "CAN device does not match");
+	zassert_equal(dev, can_tx_dev, "CAN device does not match");
 	zassert_equal(frame->id, TEST_CAN_STD_ID_1, "ID does not match");
 }
 
@@ -33,7 +33,7 @@ static void tx_std_callback_2(const struct device *dev, int error, void *user_da
 
 	k_sem_give(&tx_callback_sem);
 
-	zassert_equal(dev, can_dev, "CAN device does not match");
+	zassert_equal(dev, can_tx_dev, "CAN device does not match");
 	zassert_equal(frame->id, TEST_CAN_STD_ID_2, "ID does not match");
 }
 
@@ -42,7 +42,7 @@ static void rx_std_callback_1(const struct device *dev, struct can_frame *frame,
 	struct can_filter *filter = user_data;
 
 	assert_frame_equal(frame, &test_std_frame_1, 0);
-	zassert_equal(dev, can_dev, "CAN device does not match");
+	zassert_equal(dev, can_rx_dev, "CAN device does not match");
 	zassert_equal_ptr(filter, &test_std_filter_1, "filter does not match");
 
 	k_sem_give(&rx_callback_sem);
@@ -53,7 +53,7 @@ static void rx_std_callback_2(const struct device *dev, struct can_frame *frame,
 	struct can_filter *filter = user_data;
 
 	assert_frame_equal(frame, &test_std_frame_2, 0);
-	zassert_equal(dev, can_dev, "CAN device does not match");
+	zassert_equal(dev, can_rx_dev, "CAN device does not match");
 	zassert_equal_ptr(filter, &test_std_filter_2, "filter does not match");
 
 	k_sem_give(&rx_callback_sem);
@@ -65,7 +65,7 @@ static void rx_std_callback_fd_1(const struct device *dev, struct can_frame *fra
 	struct can_filter *filter = user_data;
 
 	assert_frame_equal(frame, &test_std_fdf_frame_1, 0);
-	zassert_equal(dev, can_dev, "CAN device does not match");
+	zassert_equal(dev, can_rx_dev, "CAN device does not match");
 	zassert_equal_ptr(filter, &test_std_filter_1, "filter does not match");
 
 	k_sem_give(&rx_callback_sem);
@@ -77,7 +77,7 @@ static void rx_std_callback_fd_2(const struct device *dev, struct can_frame *fra
 	struct can_filter *filter = user_data;
 
 	assert_frame_equal(frame, &test_std_fdf_frame_2, 0);
-	zassert_equal(dev, can_dev, "CAN device does not match");
+	zassert_equal(dev, can_rx_dev, "CAN device does not match");
 	zassert_equal_ptr(filter, &test_std_filter_2, "filter does not match");
 
 	k_sem_give(&rx_callback_sem);
@@ -182,31 +182,31 @@ static void send_receive(const struct can_filter *filter1,
 	int filter_id_2;
 	int err;
 
-	filter_id_1 = add_rx_msgq(can_dev, filter1);
-	send_test_frame(can_dev, frame1);
+	filter_id_1 = add_rx_msgq(can_rx_dev, filter1);
+	send_test_frame(can_tx_dev, frame1);
 
 	err = k_msgq_get(&can_msgq, &frame_buffer, TEST_RECEIVE_TIMEOUT);
 	zassert_equal(err, 0, "receive timeout");
 
 	assert_frame_equal(&frame_buffer, frame1, 0);
-	can_remove_rx_filter(can_dev, filter_id_1);
+	can_remove_rx_filter(can_rx_dev, filter_id_1);
 
 	k_sem_reset(&tx_callback_sem);
 
 	if ((frame1->flags & CAN_FRAME_FDF) != 0) {
-		filter_id_1 = add_rx_filter(can_dev, filter1, rx_std_callback_fd_1);
+		filter_id_1 = add_rx_filter(can_rx_dev, filter1, rx_std_callback_fd_1);
 	} else {
-		filter_id_1 = add_rx_filter(can_dev, filter1, rx_std_callback_1);
+		filter_id_1 = add_rx_filter(can_rx_dev, filter1, rx_std_callback_1);
 	}
 
 	if ((frame2->flags & CAN_FRAME_FDF) != 0) {
-		filter_id_2 = add_rx_filter(can_dev, filter2, rx_std_callback_fd_2);
+		filter_id_2 = add_rx_filter(can_rx_dev, filter2, rx_std_callback_fd_2);
 	} else {
-		filter_id_2 = add_rx_filter(can_dev, filter2, rx_std_callback_2);
+		filter_id_2 = add_rx_filter(can_rx_dev, filter2, rx_std_callback_2);
 	}
 
-	send_test_frame_nowait(can_dev, frame1, tx_std_callback_1);
-	send_test_frame_nowait(can_dev, frame2, tx_std_callback_2);
+	send_test_frame_nowait(can_tx_dev, frame1, tx_std_callback_1);
+	send_test_frame_nowait(can_tx_dev, frame2, tx_std_callback_2);
 
 	err = k_sem_take(&rx_callback_sem, TEST_RECEIVE_TIMEOUT);
 	zassert_equal(err, 0, "receive timeout");
@@ -220,8 +220,8 @@ static void send_receive(const struct can_filter *filter1,
 	err = k_sem_take(&tx_callback_sem, TEST_SEND_TIMEOUT);
 	zassert_equal(err, 0, "missing TX callback");
 
-	can_remove_rx_filter(can_dev, filter_id_1);
-	can_remove_rx_filter(can_dev, filter_id_2);
+	can_remove_rx_filter(can_rx_dev, filter_id_1);
+	can_remove_rx_filter(can_rx_dev, filter_id_2);
 }
 
 /**
@@ -232,7 +232,12 @@ ZTEST(canfd, test_get_capabilities)
 	can_mode_t cap;
 	int err;
 
-	err = can_get_capabilities(can_dev, &cap);
+	err = can_get_capabilities(can_tx_dev, &cap);
+	zassert_equal(err, 0, "failed to get CAN capabilities (err %d)", err);
+	zassert_not_equal(cap & (CAN_MODE_LOOPBACK | CAN_MODE_FD), 0,
+			  "CAN FD loopback mode not supported");
+
+	err = can_get_capabilities(can_rx_dev, &cap);
 	zassert_equal(err, 0, "failed to get CAN capabilities (err %d)", err);
 	zassert_not_equal(cap & (CAN_MODE_LOOPBACK | CAN_MODE_FD), 0,
 			  "CAN FD loopback mode not supported");
@@ -277,84 +282,103 @@ static void check_filters_preserved_between_modes(can_mode_t first, can_mode_t s
 	int err;
 
 	/* Stop controller and set first mode */
-	err = can_stop(can_dev);
+	err = can_stop(can_rx_dev);
 	zassert_equal(err, 0, "failed to stop CAN controller (err %d)", err);
 
-	err = can_get_state(can_dev, &state, NULL);
+	err = can_get_state(can_rx_dev, &state, NULL);
 	zassert_equal(err, 0, "failed to get CAN state (err %d)", err);
 	zassert_equal(state, CAN_STATE_STOPPED, "CAN controller not stopped");
 
-	err = can_set_mode(can_dev, first | CAN_MODE_LOOPBACK);
-	zassert_equal(err, 0, "failed to set first loopback mode (err %d)", err);
-	zassert_equal(first | CAN_MODE_LOOPBACK, can_get_mode(can_dev));
 
-	err = can_start(can_dev);
+#ifdef CONFIG_LOOPBACK
+	err = can_set_mode(can_rx_dev, first | CAN_MODE_LOOPBACK);
+	zassert_equal(err, 0, "failed to set first loopback mode (err %d)", err);
+	zassert_equal(first | CAN_MODE_LOOPBACK, can_get_mode(can_rx_dev));
+#else
+	err = can_set_mode(can_rx_dev, first);
+	zassert_equal(err, 0, "failed to set first mode (err %d)", err);
+	zassert_equal(first, can_get_mode(can_rx_dev));
+#endif
+
+	err = can_start(can_rx_dev);
 	zassert_equal(err, 0, "failed to start CAN controller (err %d)", err);
 
 	/* Add classic CAN and CAN FD filter */
-	filter_id_1 = add_rx_msgq(can_dev, &test_std_filter_1);
-	filter_id_2 = add_rx_msgq(can_dev, &test_std_filter_2);
+	filter_id_1 = add_rx_msgq(can_rx_dev, &test_std_filter_1);
+	filter_id_2 = add_rx_msgq(can_rx_dev, &test_std_filter_2);
 
 	/* Verify classic filter in first mode */
-	send_test_frame(can_dev, &test_std_frame_1);
+	send_test_frame(can_tx_dev, &test_std_frame_1);
 	err = k_msgq_get(&can_msgq, &frame, TEST_RECEIVE_TIMEOUT);
 	zassert_equal(err, 0, "receive timeout");
 	assert_frame_equal(&frame, &test_std_frame_1, 0);
 
 	if ((first & CAN_MODE_FD) != 0) {
 		/* Verify CAN FD filter in first mode */
-		send_test_frame(can_dev, &test_std_fdf_frame_2);
+		send_test_frame(can_tx_dev, &test_std_fdf_frame_2);
 		err = k_msgq_get(&can_msgq, &frame, TEST_RECEIVE_TIMEOUT);
 		zassert_equal(err, 0, "receive timeout");
 		assert_frame_equal(&frame, &test_std_fdf_frame_2, 0);
 	}
 
 	/* Stop controller and set second mode */
-	err = can_stop(can_dev);
+	err = can_stop(can_rx_dev);
 	zassert_equal(err, 0, "failed to stop CAN controller (err %d)", err);
 
-	err = can_get_state(can_dev, &state, NULL);
+	err = can_get_state(can_rx_dev, &state, NULL);
 	zassert_equal(err, 0, "failed to get CAN state (err %d)", err);
 	zassert_equal(state, CAN_STATE_STOPPED, "CAN controller not stopped");
 
-	err = can_set_mode(can_dev, second | CAN_MODE_LOOPBACK);
+#ifdef CONFIG_LOOPBACK
+	err = can_set_mode(can_rx_dev, second | CAN_MODE_LOOPBACK);
 	zassert_equal(err, 0, "failed to set second loopback mode (err %d)", err);
 	zassert_equal(second | CAN_MODE_LOOPBACK, can_get_mode(can_dev));
+#else
+	err = can_set_mode(can_rx_dev, second);
+	zassert_equal(err, 0, "failed to set second loopback mode (err %d)", err);
+	zassert_equal(second, can_get_mode(can_rx_dev));
+#endif
 
-	err = can_start(can_dev);
+	err = can_start(can_rx_dev);
 	zassert_equal(err, 0, "failed to start CAN controller (err %d)", err);
 
 	/* Verify classic filter in second mode */
-	send_test_frame(can_dev, &test_std_frame_1);
+	send_test_frame(can_tx_dev, &test_std_frame_1);
 	err = k_msgq_get(&can_msgq, &frame, TEST_RECEIVE_TIMEOUT);
 	zassert_equal(err, 0, "receive timeout");
 	assert_frame_equal(&frame, &test_std_frame_1, 0);
 
 	if ((second & CAN_MODE_FD) != 0) {
 		/* Verify CAN FD filter in second mode */
-		send_test_frame(can_dev, &test_std_fdf_frame_2);
+		send_test_frame(can_tx_dev, &test_std_fdf_frame_2);
 		err = k_msgq_get(&can_msgq, &frame, TEST_RECEIVE_TIMEOUT);
 		zassert_equal(err, 0, "receive timeout");
 		assert_frame_equal(&frame, &test_std_fdf_frame_2, 0);
 	}
 
 	/* Stop controller and restore CAN FD loopback mode */
-	err = can_stop(can_dev);
+	err = can_stop(can_rx_dev);
 	zassert_equal(err, 0, "failed to stop CAN controller (err %d)", err);
 
-	err = can_get_state(can_dev, &state, NULL);
+	err = can_get_state(can_rx_dev, &state, NULL);
 	zassert_equal(err, 0, "failed to get CAN state (err %d)", err);
 	zassert_equal(state, CAN_STATE_STOPPED, "CAN controller not stopped");
 
-	err = can_set_mode(can_dev, CAN_MODE_FD | CAN_MODE_LOOPBACK);
+#ifdef CONFIG_LOOPBACK
+	err = can_set_mode(can_rx_dev, CAN_MODE_FD | CAN_MODE_LOOPBACK);
 	zassert_equal(err, 0, "failed to set loopback-mode (err %d)", err);
-	zassert_equal(CAN_MODE_FD | CAN_MODE_LOOPBACK, can_get_mode(can_dev));
+	zassert_equal(CAN_MODE_FD | CAN_MODE_LOOPBACK, can_get_mode(can_rx_dev));
+#else
+	err = can_set_mode(can_rx_dev, CAN_MODE_FD);
+	zassert_equal(err, 0, "failed to set loopback-mode (err %d)", err);
+	zassert_equal(CAN_MODE_FD, can_get_mode(can_rx_dev));
+#endif
 
-	err = can_start(can_dev);
+	err = can_start(can_rx_dev);
 	zassert_equal(err, 0, "failed to start CAN controller (err %d)", err);
 
-	can_remove_rx_filter(can_dev, filter_id_1);
-	can_remove_rx_filter(can_dev, filter_id_2);
+	can_remove_rx_filter(can_rx_dev, filter_id_1);
+	can_remove_rx_filter(can_rx_dev, filter_id_2);
 }
 
 /**
@@ -382,7 +406,7 @@ ZTEST_USER(canfd, test_set_bitrate_data_while_started)
 {
 	int err;
 
-	err = can_set_bitrate_data(can_dev, TEST_BITRATE_3);
+	err = can_set_bitrate_data(can_tx_dev, TEST_BITRATE_3);
 	zassert_not_equal(err, 0, "changed data bitrate while started");
 	zassert_equal(err, -EBUSY, "wrong error return code (err %d)", err);
 }
@@ -395,10 +419,10 @@ ZTEST_USER(canfd, test_set_timing_data_while_started)
 	struct can_timing timing = { 0 };
 	int err;
 
-	err = can_calc_timing_data(can_dev, &timing, TEST_BITRATE_3, TEST_SAMPLE_POINT);
+	err = can_calc_timing_data(can_tx_dev, &timing, TEST_BITRATE_3, TEST_SAMPLE_POINT);
 	zassert_ok(err, "failed to calculate data timing (err %d)", err);
 
-	err = can_set_timing_data(can_dev, &timing);
+	err = can_set_timing_data(can_tx_dev, &timing);
 	zassert_not_equal(err, 0, "changed data timing while started");
 	zassert_equal(err, -EBUSY, "wrong error return code (err %d)", err);
 }
@@ -410,12 +434,28 @@ static bool canfd_predicate(const void *state)
 
 	ARG_UNUSED(state);
 
-	if (!device_is_ready(can_dev)) {
+	if (!device_is_ready(can_tx_dev)) {
 		TC_PRINT("CAN device not ready");
 		return false;
 	}
 
-	err = can_get_capabilities(can_dev, &cap);
+	err = can_get_capabilities(can_tx_dev, &cap);
+	zassert_equal(err, 0, "failed to get CAN controller capabilities (err %d)", err);
+
+	if ((cap & CAN_MODE_FD) == 0) {
+		return false;
+	}
+
+	if (can_tx_dev == can_rx_dev) {
+		return true;
+	}
+
+	if (!device_is_ready(can_rx_dev)) {
+		TC_PRINT("CAN device not ready");
+		return false;
+	}
+
+	err = can_get_capabilities(can_rx_dev, &cap);
 	zassert_equal(err, 0, "failed to get CAN controller capabilities (err %d)", err);
 
 	if ((cap & CAN_MODE_FD) == 0) {
@@ -428,17 +468,34 @@ static bool canfd_predicate(const void *state)
 void *canfd_setup(void)
 {
 	int err;
+	can_mode_t mode = CAN_MODE_FD;
 
 	k_sem_init(&rx_callback_sem, 0, 2);
 	k_sem_init(&tx_callback_sem, 0, 2);
 
-	(void)can_stop(can_dev);
+	(void)can_stop(can_tx_dev);
 
-	err = can_set_mode(can_dev, CAN_MODE_LOOPBACK | CAN_MODE_FD);
+#ifdef CONFIG_LOOPBACK
+	mode |= CAN_MODE_LOOPBACK;
+#endif
+
+	err = can_set_mode(can_tx_dev, mode);
 	zassert_equal(err, 0, "failed to set CAN FD loopback mode (err %d)", err);
-	zassert_equal(CAN_MODE_LOOPBACK | CAN_MODE_FD, can_get_mode(can_dev));
+	zassert_equal(mode, can_get_mode(can_tx_dev));
 
-	err = can_start(can_dev);
+	err = can_start(can_tx_dev);
+	zassert_equal(err, 0, "failed to start CAN controller (err %d)", err);
+
+	if (can_tx_dev == can_rx_dev) {
+		return NULL;
+	}
+
+	(void)can_stop(can_rx_dev);
+
+	err = can_set_mode(can_rx_dev, CAN_MODE_FD);
+	zassert_equal(err, 0, "failed to set can-fd loopback mode (err %d)", err);
+
+	err = can_start(can_rx_dev);
 	zassert_equal(err, 0, "failed to start CAN controller (err %d)", err);
 
 	return NULL;

@@ -51,8 +51,12 @@
 /**
  * @brief Common variables.
  */
-extern ZTEST_DMEM const struct device *const can_dev;
-extern ZTEST_DMEM const struct device *const can_phy;
+extern ZTEST_DMEM const struct device *const can_tx_dev;
+extern ZTEST_DMEM const struct device *const can_tx_phy;
+
+extern ZTEST_DMEM const struct device *can_rx_dev;
+extern ZTEST_DMEM const struct device *can_rx_phy;
+
 extern struct k_sem rx_callback_sem;
 extern struct k_sem tx_callback_sem;
 extern struct k_msgq can_msgq;

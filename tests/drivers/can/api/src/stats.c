@@ -23,21 +23,21 @@ ZTEST_USER(can_stats, test_can_stats_accessors)
 {
 	uint32_t val;
 
-	val = can_stats_get_bit_errors(can_dev);
-	val = can_stats_get_bit0_errors(can_dev);
-	val = can_stats_get_bit1_errors(can_dev);
-	val = can_stats_get_stuff_errors(can_dev);
-	val = can_stats_get_crc_errors(can_dev);
-	val = can_stats_get_form_errors(can_dev);
-	val = can_stats_get_ack_errors(can_dev);
-	val = can_stats_get_rx_overruns(can_dev);
+	val = can_stats_get_bit_errors(can_tx_dev);
+	val = can_stats_get_bit0_errors(can_tx_dev);
+	val = can_stats_get_bit1_errors(can_tx_dev);
+	val = can_stats_get_stuff_errors(can_tx_dev);
+	val = can_stats_get_crc_errors(can_tx_dev);
+	val = can_stats_get_form_errors(can_tx_dev);
+	val = can_stats_get_ack_errors(can_tx_dev);
+	val = can_stats_get_rx_overruns(can_tx_dev);
 }
 
 void *can_stats_setup(void)
 {
-	k_object_access_grant(can_dev, k_current_get());
+	k_object_access_grant(can_tx_dev, k_current_get());
 
-	zassert_true(device_is_ready(can_dev), "CAN device not ready");
+	zassert_true(device_is_ready(can_tx_dev), "CAN device not ready");
 
 	return NULL;
 }

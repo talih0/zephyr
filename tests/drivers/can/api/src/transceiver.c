@@ -21,21 +21,33 @@
  */
 ZTEST_USER(can_transceiver, test_get_transceiver)
 {
-	const struct device *phy = can_get_transceiver(can_dev);
+	const struct device *phy = can_get_transceiver(can_tx_dev);
+	zassert_equal(phy, can_tx_phy, "wrong CAN transceiver device pointer returned");
 
-	zassert_equal(phy, can_phy, "wrong CAN transceiver device pointer returned");
+	phy = can_get_transceiver(can_rx_dev);
+	zassert_equal(phy, can_rx_phy, "wrong CAN transceiver device pointer returned");
 }
 
 static bool can_transceiver_predicate(const void *state)
 {
 	ARG_UNUSED(state);
 
-	if (!device_is_ready(can_dev)) {
+	if (!device_is_ready(can_tx_dev)) {
 		TC_PRINT("CAN device not ready");
 		return false;
 	}
 
-	if (!device_is_ready(can_phy)) {
+	if (!device_is_ready(can_rx_dev)) {
+		TC_PRINT("CAN device not ready");
+		return false;
+	}
+
+	if (!device_is_ready(can_tx_phy)) {
+		TC_PRINT("CAN transceiver device not ready");
+		return false;
+	}
+
+	if (!device_is_ready(can_rx_phy)) {
 		TC_PRINT("CAN transceiver device not ready");
 		return false;
 	}
@@ -45,11 +57,17 @@ static bool can_transceiver_predicate(const void *state)
 
 void *can_transceiver_setup(void)
 {
-	k_object_access_grant(can_dev, k_current_get());
-	k_object_access_grant(can_phy, k_current_get());
+	k_object_access_grant(can_tx_dev, k_current_get());
+	k_object_access_grant(can_tx_phy, k_current_get());
 
-	zassert_true(device_is_ready(can_dev), "CAN device not ready");
-	zassert_true(device_is_ready(can_phy), "CAN transceiver device not ready");
+	k_object_access_grant(can_rx_dev, k_current_get());
+	k_object_access_grant(can_rx_phy, k_current_get());
+
+	zassert_true(device_is_ready(can_tx_dev), "CAN device not ready");
+	zassert_true(device_is_ready(can_tx_phy), "CAN transceiver device not ready");
+
+	zassert_true(device_is_ready(can_rx_dev), "CAN device not ready");
+	zassert_true(device_is_ready(can_rx_phy), "CAN transceiver device not ready");
 
 	return NULL;
 }

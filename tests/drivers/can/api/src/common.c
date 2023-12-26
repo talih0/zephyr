@@ -14,9 +14,14 @@
 /**
  * @brief Global variables.
  */
-ZTEST_DMEM const struct device *const can_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_canbus));
-ZTEST_DMEM const struct device *const can_phy =
+ZTEST_DMEM const struct device *const can_tx_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_canbus));
+ZTEST_DMEM const struct device *const can_tx_phy =
 	DEVICE_DT_GET_OR_NULL(DT_PHANDLE(DT_CHOSEN(zephyr_canbus), phys));
+
+ZTEST_DMEM const struct device *can_rx_dev = DEVICE_DT_GET_OR_NULL(DT_ALIAS(can_recv_node));
+ZTEST_DMEM const struct device *can_rx_phy =
+	DEVICE_DT_GET_OR_NULL(DT_PHANDLE(DT_ALIAS(can_recv_node), phys));
+
 struct k_sem rx_callback_sem;
 struct k_sem tx_callback_sem;
 
