@@ -43,11 +43,6 @@ void z_data_copy(void)
 	z_early_memcpy(&__dtcm_data_start, &__dtcm_data_load_start,
 		       __dtcm_data_end - __dtcm_data_start);
 #endif
-#ifdef CONFIG_CODE_DATA_RELOCATION
-	extern void data_copy_xip_relocation(void);
-
-	data_copy_xip_relocation();
-#endif	/* CONFIG_CODE_DATA_RELOCATION */
 #ifdef CONFIG_USERSPACE
 #ifdef CONFIG_STACK_CANARIES
 	/* stack canary checking is active for all C functions.

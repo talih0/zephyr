@@ -185,11 +185,6 @@ void z_bss_zero(void)
 		       (uintptr_t) &__ocm_bss_end
 		       - (uintptr_t) &__ocm_bss_start);
 #endif
-#ifdef CONFIG_CODE_DATA_RELOCATION
-	extern void bss_zeroing_relocation(void);
-
-	bss_zeroing_relocation();
-#endif	/* CONFIG_CODE_DATA_RELOCATION */
 #ifdef CONFIG_COVERAGE_GCOV
 	z_early_memset(&__gcov_bss_start, 0,
 		       ((uintptr_t) &__gcov_bss_end - (uintptr_t) &__gcov_bss_start));
@@ -555,6 +550,18 @@ FUNC_NORETURN void z_cstart(void)
 
 	/* initialize early init calls */
 	z_sys_init_run_level(INIT_LEVEL_EARLY);
+
+#ifdef CONFIG_CODE_DATA_RELOCATION
+	extern void bss_zeroing_relocation(void);
+
+	bss_zeroing_relocation();
+#endif	/* CONFIG_CODE_DATA_RELOCATION */
+
+#ifdef CONFIG_CODE_DATA_RELOCATION
+	extern void data_copy_xip_relocation(void);
+
+	data_copy_xip_relocation();
+#endif	/* CONFIG_CODE_DATA_RELOCATION */
 
 	/* perform any architecture-specific initialization */
 	arch_kernel_init();
