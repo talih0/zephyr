@@ -21,12 +21,7 @@ LOG_MODULE_REGISTER(flash_mt29fx, CONFIG_FLASH_LOG_LEVEL);
 #define ROUND_UP_64(x, align)                                                                      \
 	((((uint64_t)(x) + ((uint64_t)(align)-1)) / (uint64_t)(align)) * (uint64_t)(align))
 
-void xmc4xxx_ebu_nand_page_mode(const struct device *dev, int region_index, bool is_enable);
-
 #define MAX_DMA_TRANSACTION_SIZE 4095
-
-#define BAD_MARK_OVERHEAD      1
-#define ECC_OVERHEAD_PER_CHUNK 7
 
 #define ERASE_VALUE	    0xff
 
@@ -214,8 +209,6 @@ static inline void flash_mt29fx_read_data(const struct device *dev,
 	const struct flash_mt29fx_config *dev_config = dev->config;
 	volatile uint16_t *addr = (uint16_t *)dev_config->base;
 
-	xmc4xxx_ebu_nand_page_mode(dev_config->memc_dev, dev_config->memc_index, true);
-
 #ifdef CONFIG_MICRON_MT29FX_MEMC_NAND_USE_DMA
 	if (dev_data->dma_read.dma_dev != NULL) {
 		struct dma_stream *dma_read = &dev_data->dma_read;
@@ -268,8 +261,6 @@ static inline void flash_mt29fx_read_data(const struct device *dev,
 	for (int i = 0; i < len; i++) {
 		data[i] = *addr;
 	}
-
-	xmc4xxx_ebu_nand_page_mode(dev_config->memc_dev, dev_config->memc_index, false);
 }
 
 static void flash_mt29fx_enable_ecc(const struct device *dev)
