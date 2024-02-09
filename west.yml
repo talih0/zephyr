@@ -285,7 +285,7 @@ manifest:
         - crypto
     - name: mcuboot
       remote: origin_dnm5
-      revision: 3cfc0f33d67749338bebc8111b8e379d5f4ab916
+      revision: 92f554bb6cf38433c8ed7279b703b7bd8a30fa2e
       path: bootloader/mcuboot
     - name: mipi-sys-t
       path: modules/debug/mipi-sys-t
