@@ -44,11 +44,25 @@
 	};
 };
 
+&gpio1 {
+    status = "okay";
+    flash-spi-ce {
+	gpio-hog;
+	gpios = <0 GPIO_ACTIVE_HIGH>;
+	output-high;
+    };
+};
+
 &gpio4 {
     status = "okay";
     mac-spi-ce {
 	gpio-hog;
 	gpios = <6 GPIO_ACTIVE_HIGH>;
+	output-high;
+    };
+    temp-sensor-ce {
+	gpio-hog;
+	gpios = <5 GPIO_ACTIVE_HIGH>;
 	output-high;
     };
 };
