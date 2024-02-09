@@ -2,7 +2,7 @@
 #
 # Copyright (c) 2022 Schlumberger
 
-if GEN5_MODEM
+if BOARD_GEN5_MODEM
 
 config BOARD
 	default "gen5_modem"
