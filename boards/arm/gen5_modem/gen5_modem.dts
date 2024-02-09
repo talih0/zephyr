@@ -214,7 +214,7 @@
 	>;
 	pinctrl-names = "default";
 	clock-divider = <1>;
-	modes-config = <XMC4XXX_EBU_SET_MODCON(1, 0, 0, 3, 0, 1)>;
+	modes-config = <XMC4XXX_EBU_SET_MODCON(1, 0, 0, 3, 0, 0)>;
 	gpio-control-config = <XMC4XXX_EBU_SET_USERCON(0x1ff, 0)>;
 };
 
