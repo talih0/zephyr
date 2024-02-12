@@ -100,6 +100,7 @@
 		device_type = "memory";
 		reg = <0x64000000 DT_SIZE_M(2)>;
 		zephyr,memory-region = "SRAM1";
+		delay-relocation;
 	};
 };
 
