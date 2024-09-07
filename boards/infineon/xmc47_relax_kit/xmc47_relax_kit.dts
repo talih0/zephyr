@@ -19,6 +19,7 @@
 
 	aliases {
 		led0 = &led1;
+		led1 = &led2;
 		die-temp0 = &die_temp;
 		pwm-led0 = &pwm_led1;
 		watchdog0 = &wdt0;
